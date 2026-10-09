@@ -141,7 +141,7 @@ def init_recordings_db(db_path):
         # One LIVE recording per session, enforced by the database rather than by create()'s
         # read-then-insert: two Start requests racing (a double click, a retried request)
         # could both read "none live" and both insert, and a viewer records one stream
-        # (review on #116). Partial, so a session's ended recordings do not count.
+        # (review of roadmap #19). Partial, so a session's ended recordings do not count.
         conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_recordings_one_live "
                      "ON recordings(session_id) WHERE status IN ('starting', 'recording')")
         conn.execute(
@@ -173,7 +173,7 @@ def owner_folder(owner):
     is whose -- which a hash would hide.
 
     ENCODED, not replaced: replacing every odd character with `_` sent `a+b@x.com` and
-    `a_b@x.com` to one folder (review on #116), so the folder no longer said whose it was.
+    `a_b@x.com` to one folder (review of roadmap #19), so the folder no longer said whose.
     An encoding is one-to-one. A leading or trailing dot is encoded too, so the name is never
     `.` or `..` and never one Windows silently trims -- it cannot climb out of the root."""
     email = permissions.normalize_email(owner) or ""
@@ -203,7 +203,7 @@ def file_path(root, recording):
     minted, and the resolved path must still be under the root once `..` and links are
     resolved. owner_folder() already cannot produce a climbing name, so the containment check
     is the second lock on the same door, kept because this path is handed to send_file and
-    os.remove (CodeQL py/path-injection, PR #116). Raises ValueError rather than returning a
+    os.remove (CodeQL py/path-injection). Raises ValueError rather than returning a
     path outside."""
     recording_id = str(recording["id"])
     if not is_recording_id(recording_id):

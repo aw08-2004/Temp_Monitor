@@ -207,6 +207,17 @@ def test_endings(db, root, c, auth):
           got["status"] == recordings.STATUS_ENDED
           and got["end_reason"] == recordings.END_SESSION_ENDED)
 
+    # A session that expired between sweeps: extending must end the recording, not extend it.
+    sid4 = open_session(c, auth)
+    rid4 = start(c, sid4).get_json()["id"]
+    ack(c, sid4, rid4, auth)
+    with remote.get_conn(db) as conn:
+        conn.execute("UPDATE remote_sessions SET expires_at = 0 WHERE id = ?", (sid4,))
+    r = c.post(f"/api/remote/recordings/{rid4}/extend", json={})
+    check("extending a recording whose session has quietly ended ends it instead",
+          r.status_code == 409
+          and r.get_json()["recording"]["end_reason"] == recordings.END_SESSION_ENDED)
+
     sid3 = open_session(c, auth)
     rid3 = start(c, sid3).get_json()["id"]
     ack(c, sid3, rid3, auth)
@@ -247,12 +258,23 @@ def test_library(db, c, leads, rid):
           and r.get_json()["shares"] == {"groups": [leads], "users": ["bob@x.com"]})
 
     as_user("lead@x.com")
-    shared = c.get("/api/recordings").get_json()["shared"]
+    listing = c.get("/api/recordings").get_json()
+    shared = listing["shared"]
     check("a member of the group sees it as shared", [r["id"] for r in shared] == [rid])
+    check("...and, with nothing of their own to share, is shown no group names",
+          listing["groups"] == [])
     check("...without the share list (only the owner manages it)", "shares" not in shared[0])
+    views = len(fleet.list_audit(db, action="recording_view")["entries"])
     r = video(c, rid, headers={"Range": "bytes=0-1"})
     check("...can play it, ranged so the player can seek",
           r.status_code == 206 and r.data == b"VI")
+    # A plain GET returns the same bytes as a Download, so it is audited too -- once per
+    # viewer per recording per window, not once per range request.
+    video(c, rid)
+    video(c, rid, headers={"Range": "bytes=2-3"})
+    seen = fleet.list_audit(db, action="recording_view")["entries"]
+    check("watching is audited, once for a burst of requests",
+          len(seen) == views + 1 and seen[0]["actor"] == "lead@x.com")
     r = c.put(f"/api/recordings/{rid}/shares", json={"users": ["lead@x.com", "eve@x.com"]})
     check("...but cannot re-share it", r.status_code == 404)
     before = len(fleet.list_audit(db, action="recording_download")["entries"])

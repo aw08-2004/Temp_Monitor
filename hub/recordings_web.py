@@ -46,17 +46,29 @@ BROWSER_END_REASONS = (recordings.END_STOPPED, recordings.END_TIME_LIMIT,
 # paths at once -- a 409'd chunk, the reconcile sweep and an explicit stop -- spends one of
 # the session's signals on it, not three. Process-lifetime is enough: a restart forgets
 # nothing that matters, because the helper drops its badge on its own when it exits.
+# Cleared when it reaches _BADGES_DROPPED_CAP rather than growing for the life of the
+# process; the cost of forgetting is at most one extra "drop" signal for a recording that
+# has already ended, which the helper ignores.
 _badges_dropped = set()
+_BADGES_DROPPED_CAP = 10_000
+
+# When each viewer last opened each recording's video, for the recording_view audit row.
+# The video route cannot tell a player from a script saving the file -- both are GETs of
+# the same bytes, ranged or not -- so every access is audited, but a player's stream of
+# range requests is one row per viewer per recording per VIEW_AUDIT_WINDOW_SECONDS rather
+# than one per request. Pruned of expired entries when it grows.
+_last_view_audit = {}
+VIEW_AUDIT_WINDOW_SECONDS = 30 * 60
 
 
 class _RecordingRoutes:
     """The route handlers, as methods rather than closures inside the factory.
 
-    Behaviour is exactly what the closures did. They moved because a closure's branches count
-    toward the function that encloses it, so a blueprint factory holding eleven handlers was
-    scored as one function of complexity 98 (SonarCloud S3776 on #116), and a quality gate
-    that allows no new critical smell refused it. The factory below now only registers routes
-    and applies gates; everything that decides anything is here, one method per question."""
+    They are methods because a closure's branches count toward the function that encloses
+    it: with eleven handlers inside it, the factory read as one function far over any
+    complexity limit, and the PR's quality gate refused it. The factory below only registers
+    routes and applies gates; everything that decides anything is here, one method per
+    question."""
 
     def __init__(self, db_path, access, root):
         self.db_path = db_path
@@ -79,6 +91,8 @@ class _RecordingRoutes:
         the session is gone, the helper is gone, and its badge with it."""
         if rec is None or rec["id"] in _badges_dropped or rec["status"] in recordings.LIVE_STATUSES:
             return
+        if len(_badges_dropped) >= _BADGES_DROPPED_CAP:
+            _badges_dropped.clear()
         _badges_dropped.add(rec["id"])
         if not self.session_live(rec["session_id"]):
             return
@@ -214,6 +228,9 @@ class _RecordingRoutes:
                         "server_time": int(time.time())}), 200
 
     def extend(self, recording_id):
+        # Reconciled first, as status() is: a session that ended since the last sweep must
+        # end its recording here, not have it extended.
+        self.reconcile()
         rec = self.owned_or_none(recording_id)
         if rec is None:
             return self.not_found()
@@ -243,17 +260,39 @@ class _RecordingRoutes:
     def library(self):
         self.reconcile()
         me = self.me()
+        owned = recordings.list_owned(self.db_path, me)
+        # Group names are for the share editor, so only someone with something to share gets
+        # them: an owner, or someone who can record. A person who has only been SHARED a
+        # recording gets none -- every group's name is not something they otherwise see.
+        # Ids and names only, even then -- membership is not anybody else's business.
+        sharer = bool(owned) or self.access.can(permissions.REMOTE_CONTROL)
+        groups = permissions.list_groups(self.db_path) if sharer else []
         return jsonify({
-            "owned": [self.public(r, owned=True)
-                      for r in recordings.list_owned(self.db_path, me)],
+            "owned": [self.public(r, owned=True) for r in owned],
             "shared": [self.public(r, owned=False)
                        for r in recordings.list_shared_with(self.db_path, me, self.my_groups())],
             "usage": recordings.usage(self.db_path, me),
-            # Names for the share editor and for showing an owner's existing group shares.
-            # Ids and names only -- membership is not anybody else's business.
-            "groups": [{"id": g["id"], "name": g["name"]}
-                       for g in permissions.list_groups(self.db_path)],
+            "groups": [{"id": g["id"], "name": g["name"]} for g in groups],
         }), 200
+
+    def audit_access(self, rec, download, now=None):
+        """recording_download for every Download; recording_view for any other access, once
+        per viewer per recording per window (see VIEW_AUDIT_WINDOW_SECONDS)."""
+        now = time.time() if now is None else now
+        me = self.me()
+        if not download:
+            key = (me, rec["id"])
+            if now - _last_view_audit.get(key, 0) < VIEW_AUDIT_WINDOW_SECONDS:
+                return
+            if len(_last_view_audit) > 10_000:
+                for stale in [k for k, t in _last_view_audit.items()
+                              if now - t >= VIEW_AUDIT_WINDOW_SECONDS]:
+                    del _last_view_audit[stale]
+            _last_view_audit[key] = now
+        fleet.audit(self.db_path, actor=me,
+                    action="recording_download" if download else "recording_view",
+                    level=fleet.LEVEL_SECURITY, target=rec["machine"],
+                    detail={"recording_id": rec["id"], "owner": rec["owner"]})
 
     def viewable_or_none(self, recording_id):
         if not recordings.is_recording_id(recording_id):
@@ -266,9 +305,12 @@ class _RecordingRoutes:
         Only once it has ended: a file still being appended to cannot be played to the end
         or sought in, and is not yet the recording anyone was asked to keep.
 
-        Watching is deliberately NOT audited; downloading is. That is the owner's decision
-        (ROADMAP #19): a download is a copy leaving the hub, while a player issues a stream of
-        range requests that would bury the audit log in rows saying the same thing."""
+        Every access is audited, because this route cannot tell playing from copying: a plain
+        or ranged GET returns the same bytes a Download does, so auditing only `?download=1`
+        audited the button rather than the copy (review of roadmap #19). `?download=1` writes
+        recording_download every time; anything else writes recording_view at most once per
+        viewer per recording per VIEW_AUDIT_WINDOW_SECONDS, so a player's range requests are
+        one row, not hundreds."""
         rec = self.viewable_or_none(recording_id)
         if rec is None:
             return self.not_found()
@@ -279,10 +321,7 @@ class _RecordingRoutes:
         except ValueError:
             return self.not_found()
         download = request.args.get("download") == "1"
-        if download:
-            fleet.audit(self.db_path, actor=self.me(), action="recording_download",
-                        level=fleet.LEVEL_SECURITY, target=rec["machine"],
-                        detail={"recording_id": rec["id"], "owner": rec["owner"]})
+        self.audit_access(rec, download)
         stamp = time.strftime("%Y%m%d-%H%M", time.localtime(rec["created_at"]))
         try:
             resp = send_file(path, mimetype=rec["mime"].split(";")[0], conditional=True,

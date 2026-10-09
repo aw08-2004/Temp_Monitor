@@ -845,7 +845,7 @@ def _is_id_key(key):
 def _droppable(target):
     """The keys of a dict that may go: every one but an id's. A row whose list is already
     down to that one row is still a row, and handing the model it without its id is the half-
-    an-id failure this whole function exists to prevent (review on #116)."""
+    an-id failure this whole function exists to prevent."""
     return [k for k in target if not _is_id_key(k)]
 
 

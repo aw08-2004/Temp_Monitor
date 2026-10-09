@@ -129,7 +129,7 @@ def _replacement_acl(win32security, ntsecuritycon, wanted, container):
 
 def _restrict(env_path, container):
     """protect() and protect_directory(), split into the three helpers above so each says one
-    thing (SonarCloud S3776 on #116 scored the single function at 19)."""
+    thing; as one function it was over the PR's complexity limit."""
     if sys.platform != "win32" or not env_path or not os.path.exists(env_path):
         return None
     try:

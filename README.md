@@ -1529,7 +1529,8 @@ session. There is no separate recording permission.
   group share follows the group: whoever is a member when they open it may watch. Only the
   owner can share or delete a recording; people it is shared with can play and download it.
   Recordings, extensions, shares, downloads and deletes are all in the audit log
-  (`recording_*`).
+  (`recording_*`), and so is watching: `recording_view`, once per viewer per recording per
+  half hour, because the hub cannot tell a player from a script saving the file.
 - **Checking the badge on a PC** without a hub or a session:
   `TempMonitorAgent.exe --recording-badge-test 30` shows it for 30 seconds and follows the
   lock screen when it runs as SYSTEM in the console session.

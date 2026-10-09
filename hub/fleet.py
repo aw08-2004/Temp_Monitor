@@ -658,6 +658,7 @@ ACTION_LEVELS = {
     "recording_extend": LEVEL_SECURITY,
     "recording_share": LEVEL_SECURITY,
     "recording_download": LEVEL_SECURITY,
+    "recording_view": LEVEL_SECURITY,
     "recording_delete": LEVEL_SECURITY,
     "remote_turn_secret_set": LEVEL_SECURITY,
     # Installing the virtual display puts a third-party driver into the DriverStore and its

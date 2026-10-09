@@ -3661,9 +3661,15 @@ recording's agent half waits on the 3.43.0 release (see *Owed locally*).
     video is bytes of somebody's screen, and the list's reasons routinely name people.
   * **Not done:** a superuser or admin override to see or delete other people's recordings
     (the owner said recordings belong to their owner; an operator who leaves keeps their
-    recordings until someone with disk access removes them); auditing every playback (only
-    downloads are audited, as decided); seeking in long recordings is limited, because a
-    MediaRecorder webm carries no cue index.
+    recordings until someone with disk access removes them); seeking in long recordings is
+    limited, because a MediaRecorder webm carries no cue index.
+  * **Watching is audited too**, which goes one step past the decision (downloads audited).
+    Review found the video route serves the same bytes with or without `?download=1`, so
+    auditing only the Download button audited the button, not the copy. Every access now
+    writes `recording_view`, once per viewer per recording per 30 minutes so a player's
+    range requests are one row; `?download=1` still writes `recording_download` every time.
+  * **Later, with agent 3.43.0:** a `MIN_RECORDING_AGENT` constant would hide **Record** for
+    older agents instead of letting them fail after the badge timeout (review suggestion).
 
 ### BitLocker key escrow · hub 1.131.0 · `bitlocker.py` / `bitlocker_web.py`
 
