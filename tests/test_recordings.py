@@ -124,6 +124,16 @@ def test_badge_gate():
     recordings.confirm_badge(db, rec2["id"], "PC-01", "failed", now=1003)
     check("a badge that could not be shown fails an unconfirmed recording",
           recordings.get(db, rec2["id"])["status"] == recordings.STATUS_FAILED)
+    rec3 = new(db, session="s3")
+    recordings.confirm_badge(db, rec3["id"], "PC-01", "shown", now=1003)
+    recordings.confirm_badge(db, rec3["id"], "PC-01", "hidden", now=1004)
+    got3 = recordings.get(db, rec3["id"])
+    check("a badge reported hidden while still recording ends it (nobody asked for that)",
+          got3["status"] == recordings.STATUS_ENDED
+          and got3["end_reason"] == recordings.END_BADGE_FAILED)
+    recordings.confirm_badge(db, rec3["id"], "PC-01", "hidden", now=1005)
+    check("...and the expected hidden after an ending changes nothing",
+          recordings.get(db, rec3["id"])["ended_at"] == 1004)
     recordings.confirm_badge(db, rec["id"], "PC-01", "failed", now=1004)
     got = recordings.get(db, rec["id"])
     check("...and ends a running one (the lock screen it could not follow)",

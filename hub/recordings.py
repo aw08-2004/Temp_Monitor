@@ -293,7 +293,11 @@ def confirm_badge(db_path, recording_id, machine, state, now=None):
 
     `shown` moves a starting recording to recording and starts its clock. `failed` ends it,
     whichever state it is in: a recording whose badge is not on screen is exactly what the
-    owner ruled out."""
+    owner ruled out. So does `hidden`: the hub only asks for the badge to come down once a
+    recording has ended, so a `hidden` for one still live is a badge gone without being
+    asked, and treating it as informational would leave video recording with nothing on
+    screen (review of roadmap #19). For an ended recording it is the expected reply, and
+    finish() is a no-op."""
     now = int(now if now is not None else time.time())
     rec = get(db_path, recording_id)
     if rec is None or rec["machine"] != machine:
@@ -304,7 +308,7 @@ def confirm_badge(db_path, recording_id, machine, state, now=None):
                 "UPDATE recordings SET status = ?, confirmed_at = ?, deadline = ? "
                 "WHERE id = ? AND status = ?",
                 (STATUS_RECORDING, now, now + SEGMENT_SECONDS, rec["id"], STATUS_STARTING))
-    elif state == "failed":
+    elif state in ("failed", "hidden"):
         finish(db_path, rec["id"], END_BADGE_FAILED, actor=machine, now=now)
     return get(db_path, rec["id"])
 
