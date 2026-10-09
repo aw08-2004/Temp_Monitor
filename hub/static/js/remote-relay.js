@@ -114,7 +114,7 @@
 
         opts.video.srcObject = stream;
         const played = opts.video.play();
-        if (played && played.catch) played.catch(() => {});
+        played?.catch?.(() => {});
 
         function newDecoder() {
             if (decoder) { try { decoder.close(); } catch (e) { /* already closed */ } }

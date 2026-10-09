@@ -507,7 +507,7 @@
             if (pollTimer) { clearTimeout(pollTimer); pollTimer = null; }
             // Relayed counts as connected: the media has its own long-poll, and this one is
             // only waiting for the session to end.
-            const connected = !!relay || (pc && pc.connectionState === 'connected');
+            const connected = !!relay || pc?.connectionState === 'connected';
             pollTimer = setTimeout(poll, connected ? POLL_CONNECTED_MS : POLL_INTERVAL_MS);
         }
 
@@ -535,7 +535,7 @@
             if (!pc) return;
             try {
                 if (sig.kind === 'offer') {
-                    relayCapable = !!(sig.payload && sig.payload.relay);
+                    relayCapable = !!sig.payload?.relay;
                     await pc.setRemoteDescription({ type: 'offer', sdp: sig.payload.sdp });
                     remoteSet = true;
                     for (const ice of pendingIce) await pc.addIceCandidate(ice).catch(() => {});
