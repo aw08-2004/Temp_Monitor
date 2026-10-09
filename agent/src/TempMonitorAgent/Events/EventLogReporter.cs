@@ -68,8 +68,7 @@ public static class EventLogReporter
     /// and nothing at all while no subscription exists.</summary>
     public static void RefreshIfDue()
     {
-        var subscriptions = EventSubscriptionStore.Current;
-        var version = EventSubscriptionStore.Version;
+        var (version, subscriptions) = EventSubscriptionStore.Snapshot;
 
         TimeSpan sinceLast;
         lock (Gate)
@@ -131,7 +130,7 @@ public static class EventLogReporter
             fresh.RemoveRange(0, dropped);
         }
 
-        var payload = ToPayload(fresh, dropped, error);
+        var payload = ToPayload(fresh, dropped, error, version);
         lock (Gate) { _pending = payload; }
     }
 
@@ -187,8 +186,13 @@ public static class EventLogReporter
     /// <c>events</c> is always present, even when empty. See the class remarks: that is the
     /// whole reason the payload is an object rather than the array itself, and it is what
     /// the hub tests with <c>is not None</c>.</summary>
+    /// <param name="version">The subscription document this scan was filtered with. It is NOT
+    /// the version the heartbeat carries beside it: a new document can arrive between this scan
+    /// and the heartbeat that sends it, and the heartbeat then names the new version for records
+    /// the old one chose. The hub trusts a per-id count only when the report's OWN document asked
+    /// for that id (roadmap #17), so this is the one that has to be exact.</param>
     public static JsonObject ToPayload(IReadOnlyList<WindowsEventReader.Record> records,
-                                       int dropped, string? error)
+                                       int dropped, string? error, string? version = null)
     {
         var array = new JsonArray();
         foreach (var record in records)
@@ -208,6 +212,7 @@ public static class EventLogReporter
             ["events"] = array,
             ["dropped"] = dropped,
             ["error"] = error,
+            ["version"] = version,
         };
     }
 }

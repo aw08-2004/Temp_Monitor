@@ -1209,6 +1209,11 @@ def _resolve_events(db_path, machine, out, now, context=None):
     survives review. `record_events` overwrites `error` on each report rather than accumulating
     it, so one clean report puts the counters back.
 
+    **A machine whose collector was blind at any point in the window is UNKNOWN too** (hub
+    1.141.0, roadmap #17). The error clears on the next clean report, but the window still
+    counts the stretch the machine could not read, so the number has a hole in it until the
+    window moves past the last error. `events.rule_counters` reports it as `blind`.
+
     **A machine whose latest report lost events to the cap is UNKNOWN as well**, and this one
     was missed on the first pass. `MAX_EVENTS_PER_REPORT` truncates the tail of a report, so a
     heartbeat carrying two hundred Information events and then one Critical arrives complete
@@ -1236,7 +1241,8 @@ def _resolve_events(db_path, machine, out, now, context=None):
         counters = None
 
     trusted = bool(counters) and counters.get("reported_at") is not None \
-        and not counters.get("error") and not counters.get("incomplete")
+        and not counters.get("error") and not counters.get("incomplete") \
+        and not counters.get("blind")
     if not trusted:
         # Age None with a max_age set is UNKNOWN by _put's second branch, which is the
         # "cannot show it is current" rule. Reused for the error and incomplete cases rather
@@ -1262,13 +1268,21 @@ def _resolve_events(db_path, machine, out, now, context=None):
     if trusted:
         subscribed_since = context.get("subscribed_since") or {}
         reported_at = counters["reported_at"]
+        collected_ids = counters.get("collected_ids")
         for event_id, count in (counters.get("by_event_id") or {}).items():
-            asked_at = subscribed_since.get(event_id)
-            # Strictly before, so a report landing in the same second as the subscription
-            # counts as having adopted it. These timestamps are whole seconds and a heartbeat
-            # runs every ten, so a tie is a tie, not evidence of the gap this guards against.
-            if asked_at is not None and reported_at < asked_at:
-                continue    # asked for after this machine last spoke -- see the docstring
+            if collected_ids is not None:
+                # The exact answer, from an agent that names the document behind each report:
+                # was THIS id being watched when these records were chosen.
+                if event_id not in collected_ids:
+                    continue
+            else:
+                # The fallback for an agent too old to say. Strictly before, so a report
+                # landing in the same second as the subscription counts as having adopted it.
+                # These timestamps are whole seconds and a heartbeat runs every ten, so a tie
+                # is a tie, not evidence of the gap this guards against.
+                asked_at = subscribed_since.get(event_id)
+                if asked_at is not None and reported_at < asked_at:
+                    continue    # asked for after this machine last spoke -- see the docstring
             _put(out, Var(f"event.id_{event_id}.count", KIND_NUMBER, GROUP_EVENT, AGE_EVENT),
                  _num(count), age)
 

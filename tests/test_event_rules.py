@@ -3,7 +3,7 @@ records (roadmap #17, the half #16 handed on).
 
 **The silent failure this file exists to catch is a rule that reads zero off a machine nobody
 is listening to.** Every variable here is a count, zero is a perfectly ordinary value, and
-that makes six different kinds of "we do not know" indistinguishable from "it did not
+that makes eight different kinds of "we do not know" indistinguishable from "it did not
 happen" unless something asserts otherwise:
 
   * **A machine that has never reported events at all.** No `machine_event_state` row means
@@ -27,6 +27,14 @@ happen" unless something asserts otherwise:
     seconds old and counters reading zero. `event.error_count == 0` would settle TRUE for a PC
     whose audit log nobody can see. Found in review of this change rather than by me, which is
     why it is spelled out at this length.
+  * **A collector that WAS blind inside the window.** The error clears on the next clean
+    report, but a count over the last day still includes the stretch the machine could not
+    read. Until hub 1.141.0 one clean report restored trust in that whole window; now the
+    counters stay UNKNOWN until the window has moved past the last error (roadmap #17).
+  * **A report filtered with a document older than the id's subscription.** The timestamp
+    test below misses the one heartbeat that carries a new document's first report while the
+    records in it were chosen by the old one. An agent that names the document behind each
+    report closes it exactly; one too old to say keeps the timestamp test.
   * **A report the per-report cap truncated.** Also found in review, and it defeated this
     file's own written argument for ignoring drops. The cap takes the TAIL, so two hundred
     Information events followed by one Critical arrive as two hundred Information events with
@@ -561,13 +569,115 @@ def test_a_collector_error_is_unknown_even_on_a_fresh_report():
               rules.evaluate({"var": "event.error_count", "cmp": "==", "value": 0},
                              broken) is rules.UNKNOWN)
 
-        # One clean report puts them back -- record_events overwrites `error`.
+        # One clean report clears `error` -- but NOT trust in the window, which still contains
+        # the stretch the machine could not read. Until hub 1.141.0 this asserted the
+        # opposite; see test_a_window_with_a_blind_stretch_stays_unknown.
         events.record_events(db, "PC-1", {"events": []})
-        recovered = resolve(db, "PC-1")
-        check("a clean report restores the counters",
-              value_of(recovered, "event.count") == 2)
-        check("and the per-id counter comes back",
-              value_of(recovered, "event.id_4625.count") == 2)
+        check("a clean report clears the error",
+              events.machine_state(db, "PC-1")["error"] is None)
+        check("but the window still has the blind stretch in it",
+              value_of(resolve(db, "PC-1"), "event.count") is rules.UNKNOWN)
+    finally:
+        _drop(db)
+
+
+def set_last_error_at(db_path, machine, when):
+    conn = sqlite3.connect(db_path)
+    conn.execute("UPDATE machine_event_state SET last_error_at = ? WHERE machine = ?",
+                 (int(when), machine))
+    conn.commit()
+    conn.close()
+
+
+def test_a_window_with_a_blind_stretch_stays_unknown():
+    """The blind interval after an error clears (roadmap #17's second residue column).
+
+    A machine reports "access is denied reading Security" for an afternoon, then recovers. The
+    next clean report is fresh and error-free, so before hub 1.141.0 every counter came back --
+    over a 24-hour window that still included the afternoon nobody could see. A brute-force
+    rule reading `event.id_4625.count < 5` would settle TRUE on a count with a hole in it.
+    """
+    print("\n-- blind for part of the window --")
+    db = fresh_db()
+    try:
+        events.create_subscription(db, name="Failed logons", log="Security",
+                                   event_ids=[4625], levels=["warning"])
+        record("PC-1", db, event_id=4625, count=3)
+        events.record_events(db, "PC-1", {"events": [], "error": "Access is denied"})
+        events.record_events(db, "PC-1", {"events": []})
+        window = events.DEFAULT_RULE_WINDOW_SECONDS
+
+        blind = resolve(db, "PC-1")
+        check("an error inside the window keeps the totals UNKNOWN",
+              value_of(blind, "event.count") is rules.UNKNOWN)
+        check("and the per-id counter absent", "event.id_4625.count" not in blind)
+
+        # Move the error to just outside the window: the count no longer covers it.
+        set_last_error_at(db, "PC-1", NOW - window - 1)
+        clear = resolve(db, "PC-1")
+        check("once the window has moved past the error the counters are real",
+              value_of(clear, "event.count") == 3)
+        check("per id too", value_of(clear, "event.id_4625.count") == 3)
+
+        # last_error_at survives clean reports -- that persistence is the point.
+        events.record_events(db, "PC-1", {"events": []})
+        conn = sqlite3.connect(db)
+        kept = conn.execute("SELECT last_error_at FROM machine_event_state "
+                            "WHERE machine = 'PC-1'").fetchone()[0]
+        conn.close()
+        check("a clean report does not erase when the last error was", kept == NOW - window - 1)
+    finally:
+        _drop(db)
+
+
+def test_a_report_names_the_document_it_was_collected_under():
+    """The adopted-document residue (roadmap #17's first column), closed exactly.
+
+    A subscription for 4625 is added. The machine's next heartbeat is newer than the
+    subscription -- so the timestamp test passes -- but the records in it were chosen by the
+    document it held BEFORE (the new one arrives in that heartbeat's reply). Its zero for 4625
+    is the same lie the timestamp test exists to refuse, ten seconds long. An agent that names
+    the document behind each report lets the hub refuse it outright.
+    """
+    print("\n-- the report's own document decides --")
+    db = fresh_db()
+    try:
+        before = events.document(db)["version"]          # the empty document
+        sub = events.create_subscription(db, name="New watch", log="Security",
+                                         event_ids=[4625], levels=["warning"])
+        after = events.document(db)["version"]
+        check("adding the subscription changed the document", before != after)
+        check("both versions are remembered with what they asked for",
+              events.document_ids(db, before) == frozenset()
+              and events.document_ids(db, after) == frozenset({4625}))
+        check("a version this hub never served resolves to None",
+              events.document_ids(db, "never-served") is None)
+
+        # The first report after the subscription, but filtered with the OLD document.
+        events.record_events(db, "PC-1", {"events": [], "version": before})
+        set_reported_at(db, "PC-1", sub["updated_at"] + 5)
+        stale_doc = resolve(db, "PC-1")
+        check("the timestamp says adopted, the report's document says not -- absent",
+              "event.id_4625.count" not in stale_doc)
+        check("the totals are still counted", value_of(stale_doc, "event.count") == 0)
+
+        # The next report was filtered with the new document: now the zero is real.
+        events.record_events(db, "PC-1", {"events": [], "version": after})
+        adopted = resolve(db, "PC-1")
+        check("a report under the new document gives a real zero",
+              value_of(adopted, "event.id_4625.count") == 0)
+
+        # Even an OLD report time is trusted when its document asked for the id. (The
+        # timestamp fallback would refuse this one.)
+        set_reported_at(db, "PC-1", sub["updated_at"] - 3600)
+        check("the document, not the timestamp, decides when both are known",
+              value_of(resolve(db, "PC-1"), "event.id_4625.count") == 0)
+
+        # An agent too old to name its document falls back to the timestamp test.
+        events.record_events(db, "PC-2", {"events": []})
+        set_reported_at(db, "PC-2", sub["updated_at"] - 3600)
+        check("no version: the timestamp test still applies",
+              "event.id_4625.count" not in resolve(db, "PC-2"))
     finally:
         _drop(db)
 
@@ -729,6 +839,8 @@ def main():
     test_the_default_window_matches_the_setting_the_console_uses()
     test_a_stopped_collector_ages_out_to_unknown()
     test_a_collector_error_is_unknown_even_on_a_fresh_report()
+    test_a_window_with_a_blind_stretch_stays_unknown()
+    test_a_report_names_the_document_it_was_collected_under()
     test_a_report_truncated_by_the_cap_is_unknown()
     test_an_id_subscribed_after_the_last_report_is_not_zero_yet()
     test_an_older_subscription_keeps_an_id_trustworthy()

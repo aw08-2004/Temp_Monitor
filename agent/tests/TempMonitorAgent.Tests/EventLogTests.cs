@@ -156,4 +156,23 @@ public class EventLogTests
         // hub. Sending it would invite somebody to key on it.
         Assert.Null(first["record_id"]);
     }
+
+    [Fact]
+    public void The_report_names_the_document_it_was_scanned_under()
+    {
+        // Not the heartbeat's event_subscriptions_version: a new document can land between
+        // the scan and the send, and the hub decides per-id trust on this one (roadmap #17).
+        var payload = EventLogReporter.ToPayload([], dropped: 0, error: null, version: "v-old");
+        Assert.Equal("v-old", payload["version"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void The_snapshot_never_pairs_a_version_with_another_documents_subscriptions()
+    {
+        EventSubscriptionStore.Apply("snap-1",
+            [new EventSubscriptionStore.Subscription("a", "Security", [4625], [], "")], 200);
+        var (version, subscriptions) = EventSubscriptionStore.Snapshot;
+        Assert.Equal("snap-1", version);
+        Assert.Equal(4625, Assert.Single(subscriptions).EventIds[0]);
+    }
 }
