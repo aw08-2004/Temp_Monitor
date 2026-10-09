@@ -1,6 +1,6 @@
 # The hub container image's exact dependencies, with hashes -- generated, do not edit.
 # Regenerate with `python tools/lock_hub_requirements.py` after changing requirements.txt;
-# hub/Dockerfile fails the build if this file is missing a requirement.
+# `--check` (run by the image workflow and the hub tests) fails while this file is stale.
 --only-binary :all:
 
 authlib==1.8.0 \

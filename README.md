@@ -292,8 +292,9 @@ there. Don't set `HUB_STATE_DIR`, `HUB_LOG_DIR` or `HUB_RECORDINGS_DIR`; the ima
 - **Dependencies are locked for the image.** `hub/requirements.txt` stays unpinned for the
   Windows service. The image installs `hub/requirements.lock` instead: exact versions, every
   wheel hash-checked, wheels only. After changing `requirements.txt`, run
-  `python tools/lock_hub_requirements.py` (it needs Docker) and commit the new lock. A stale
-  lock fails the image build and names the missing package.
+  `python tools/lock_hub_requirements.py` (it needs Docker) and commit the new lock.
+  `--check` names anything a stale lock is missing. The image workflow runs it before every
+  build, and so does the hub test suite.
 
 **Moving an existing Windows hub into Docker:**
 

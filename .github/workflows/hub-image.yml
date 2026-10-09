@@ -34,11 +34,13 @@ on:
     branches: [main, beta]
     paths:
       - "hub/**"
+      - "tools/lock_hub_requirements.py"
       - ".github/workflows/hub-image.yml"
   pull_request:
     branches: [main]
     paths:
       - "hub/**"
+      - "tools/lock_hub_requirements.py"
       - ".github/workflows/hub-image.yml"
 
 concurrency:
@@ -113,6 +115,27 @@ jobs:
                  exit 1 ;;
           esac
 
+      - name: Check requirements.lock is current
+        # Before any image work: a lock that no longer covers requirements.txt would build an
+        # image that crashes on import. Pure Python against the two files; no image needed.
+        run: python3 tools/lock_hub_requirements.py --check
+
+      - name: Pull the base image
+        run: |
+          # Pulled here, with retries, rather than by `docker build --pull`: Docker Hub's auth
+          # endpoint has timed out from GitHub's runners on this workflow's own runs (504s on
+          # auth.docker.io) while answering fine everywhere else. One flaky token request
+          # should cost a retry, not a red build. Read from the Dockerfile so the two never
+          # name different images.
+          base=$(awk 'toupper($1) == "FROM" { print $2; exit }' hub/Dockerfile)
+          for attempt in 1 2 3 4 5; do
+            if docker pull "$base"; then exit 0; fi
+            echo "::warning::pulling ${base} failed (attempt ${attempt} of 5); retrying"
+            sleep $((attempt * 15))
+          done
+          echo "::error::could not pull ${base} from its registry after 5 attempts"
+          exit 1
+
       - name: Build
         env:
           REPO: ${{ steps.version.outputs.repo }}
@@ -124,7 +147,7 @@ jobs:
         run: |
           # The source label is what links the package to this repository on GHCR, so the
           # repository's GITHUB_TOKEN can keep pushing to it after the first publish.
-          docker build --pull \
+          docker build \
             --label "org.opencontainers.image.source=${SOURCE}" \
             --label "org.opencontainers.image.version=${VERSION}" \
             --label "org.opencontainers.image.revision=${REVISION}" \

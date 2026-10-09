@@ -22,9 +22,9 @@ ENV PYTHONUNBUFFERED=1 \
 
 # Dependencies come from requirements.lock -- exact versions, every wheel checked against a
 # recorded hash, wheels only so no package's setup script runs here. tools/lock_hub_requirements.py
-# explains why the image pins and requirements.txt does not. The second pip call is the guard
-# against a stale lock: with no index to fall back on, a requirement the lock is missing fails
-# the build by name, instead of producing an image that crashes on import.
+# explains why the image pins and requirements.txt does not, and its --check -- run by the image
+# workflow before this build -- is what fails a lock that no longer covers requirements.txt.
+# requirements.txt is copied only so the image carries the file the hub's docs point at.
 #
 # Non-root. /state is created here and owned by the hub user, so a fresh named volume mounted
 # over it inherits that ownership; .env, logs/ (the SQLite DB and spools) and data/
@@ -34,7 +34,6 @@ ENV PYTHONUNBUFFERED=1 \
 # One RUN, before the code is copied, so a code-only change reuses this layer.
 COPY requirements.txt requirements.lock /app/hub/
 RUN pip install --only-binary :all: --require-hashes -r /app/hub/requirements.lock \
-    && pip install --no-index -r /app/hub/requirements.txt \
     && pip check \
     && useradd --system --uid 10001 --home-dir /state --shell /usr/sbin/nologin fleethub \
     && mkdir -p /state \
