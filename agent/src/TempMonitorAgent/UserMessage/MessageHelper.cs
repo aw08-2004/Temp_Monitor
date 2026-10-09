@@ -19,7 +19,10 @@ namespace TempMonitorAgent.UserMessage;
 /// <c>SetThreadDesktop</c> -- it fails with ERROR_BUSY for the life of the thread -- so this
 /// must never be a thread-pool thread, even though this process does nothing else. Copying
 /// the discipline costs nothing and means the rule cannot be broken later by someone adding
-/// desktop work to this helper.
+/// desktop work to this helper. Desktop work could not go on the dialog thread itself, though:
+/// it is born an STA, and an STA owns COM's hidden window from birth when it is the process's
+/// first (this one is: Main is MTA) and from its first pumping wait otherwise, so it cannot
+/// attach anywhere (see <see cref="Remote.RecordingBadge"/>).
 ///
 /// The answer travels back through a file rather than an exit code: an exit code has room for
 /// a number, and what the hub needs is which of up to four buttons was pressed plus when it

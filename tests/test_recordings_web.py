@@ -232,6 +232,27 @@ def test_endings(db, root, c, auth):
     signals = c.get(f"/api/agent/remote/{sid3}/poll?after_seq=0", headers=auth).get_json()
     off = [s for s in signals["signals"] if s["kind"] == "record" and not s["payload"]["on"]]
     check("...once, however often it is stopped", len(off) == 1)
+
+    # The helper says WHY a badge would not go up. Before hub 1.143.0 the hub kept only
+    # `badge_failed`, so the console said "could not show the badge" and nothing else.
+    sid5 = open_session(c, auth)
+    rid5 = start(c, sid5).get_json()["id"]
+    c.post(f"/api/agent/remote/{sid5}/signal",
+           json={"kind": "recording", "payload": {
+               "recording_id": rid5, "badge": "failed",
+               "error": "could not attach to the input desktop (win32 170)",
+               "desktop": "Winlogon"}},
+           headers=auth)
+    status = c.get(f"/api/remote/recordings/{rid5}").get_json()
+    check("a failed badge ends the recording with the PC's own reason",
+          status["status"] == recordings.STATUS_FAILED
+          and status["end_reason"] == recordings.END_BADGE_FAILED
+          and status["end_detail"]
+          == "could not attach to the input desktop (win32 170) (desktop Winlogon)")
+    import fleet
+    ends = fleet.list_audit(db, action="recording_end", limit=50)["entries"]
+    mine = [e for e in ends if (e.get("detail") or {}).get("recording_id") == rid5]
+    check("...and audits it", mine and "win32 170" in (mine[0]["detail"].get("detail") or ""))
     return rid3
 
 

@@ -128,17 +128,6 @@ public static class RemoteHelper
         }
     }
 
-    /// <summary>
-    /// Runs the desktop-tracking diagnostic: <c>--desktop-probe [seconds]</c>.
-    ///
-    /// This exists because everything about capturing the lock screen rests on one assumption --
-    /// that this process can see and follow the switch to the Winlogon desktop -- and that
-    /// assumption is cheap to test and expensive to debug through a full remote session. Run it,
-    /// press Win+L, trigger a UAC prompt, and watch the reported desktop change.
-    ///
-    /// Run it session-injected (the service does that) to test the real conditions; run it
-    /// directly from a console to see what an ordinary user-token process is allowed to observe.
-    /// </summary>
     /// <summary>True if this process was launched as the recording-badge diagnostic.</summary>
     public static bool IsRecordingBadgeTest(string[] args) =>
         args.Any(a => string.Equals(a, "--recording-badge-test", StringComparison.Ordinal));
@@ -151,6 +140,12 @@ public static class RemoteHelper
     /// desktop exactly as a recording does. Run it session-injected (as SYSTEM in the console
     /// session) and press Win+L to check the lock screen; run it from a console to check the
     /// look on an ordinary desktop.
+    ///
+    /// From a console it is a weaker test than it looks. Where the user may open the input
+    /// desktop it attaches as a recording does; where they may not, the badge goes up on the
+    /// desktop it is already on without ever calling SetThreadDesktop, and passes regardless
+    /// of whether the attach works. The attach itself is pinned by RecordingBadgeTests, on a
+    /// private desktop, with no SYSTEM needed.
     /// </summary>
     public static int RunRecordingBadgeTest(string[] args)
     {
@@ -171,17 +166,28 @@ public static class RemoteHelper
             Thread.Sleep(50);
         using var badge = new RecordingBadge(desktops, Say);
         badge.Failed += (desktop, error) => Say($"FAILED on {desktop}: {error}");
-        string? error = badge.Show("self-test");
+        string? error = badge.Show("self-test", out string? shownOn);
         if (error is not null)
         {
-            Say("FAILED: " + error);
+            Say($"FAILED on {shownOn ?? "(unknown desktop)"}: {error}");
             return 1;
         }
-        Say($"badge up for {seconds}s.");
+        Say($"badge up on {shownOn ?? "(unknown desktop)"} for {seconds}s.");
         Thread.Sleep(TimeSpan.FromSeconds(seconds));
         return 0;
     }
 
+    /// <summary>
+    /// Runs the desktop-tracking diagnostic: <c>--desktop-probe [seconds]</c>.
+    ///
+    /// This exists because everything about capturing the lock screen rests on one assumption --
+    /// that this process can see and follow the switch to the Winlogon desktop -- and that
+    /// assumption is cheap to test and expensive to debug through a full remote session. Run it,
+    /// press Win+L, trigger a UAC prompt, and watch the reported desktop change.
+    ///
+    /// Run it session-injected (the service does that) to test the real conditions; run it
+    /// directly from a console to see what an ordinary user-token process is allowed to observe.
+    /// </summary>
     public static int RunDesktopProbe(string[] args)
     {
         int seconds = 60;
@@ -383,7 +389,7 @@ public static class RemoteHelper
             string? id = badge.RecordingId;
             if (id is null) return;
             badge.Hide();
-            ReportBadge(signaling, id, "failed", error, desktop, cts.Token);
+            ReportBadge(signaling, new BadgeReport(id, "failed", error, desktop), cts.Token);
         };
 
         using var inputQueue = new InputQueue(log: m => Log.Warning("{Msg}", m));
@@ -688,37 +694,57 @@ public static class RemoteHelper
         {
             if (on)
             {
-                string? error = badge.Show(id);
-                if (error is not null) badge.Hide();
-                ReportBadge(signaling, id, error is null ? "shown" : "failed", error, null, ct);
+                ReportBadge(signaling, ShowBadge(badge, id), ct);
             }
             else if (badge.RecordingId == id)
             {
                 badge.Hide();
-                ReportBadge(signaling, id, "hidden", null, null, ct);
+                ReportBadge(signaling, new BadgeReport(id, "hidden", null, null), ct);
             }
         }, ct);
     }
 
-    private static void ReportBadge(RemoteSignalingClient signaling, string recordingId,
-                                    string state, string? error, string? desktop,
+    /// <summary>One <c>recording</c> signal's worth of what happened to the badge. A value of
+    /// its own, rather than four loose arguments to <see cref="ReportBadge"/>, because the
+    /// desktop used to be dropped right there: the hub got <c>"desktop": null</c> on every
+    /// failure, for a literal <c>null</c> at the call site that no test could see.</summary>
+    internal readonly record struct BadgeReport(
+        string RecordingId, string State, string? Error, string? Desktop)
+    {
+        /// <summary>The signal payload, under the names hub/remote_web.py reads.</summary>
+        public object Payload() => new
+        {
+            recording_id = RecordingId,
+            badge = State,
+            error = Error,
+            desktop = Desktop,
+        };
+    }
+
+    /// <summary>Put the badge up for <paramref name="recordingId"/> and say what to tell the
+    /// hub. A failure carries the desktop it happened on: the hub keeps it beside the error in
+    /// end_detail, and "win32 170" on the lock screen is a different problem from the same on
+    /// Default. A failed badge is also taken down here, so nothing half-shown outlives the
+    /// recording the hub is about to end.</summary>
+    internal static BadgeReport ShowBadge(RecordingBadge badge, string recordingId)
+    {
+        string? error = badge.Show(recordingId, out string? desktop);
+        if (error is not null) badge.Hide();
+        return new BadgeReport(recordingId, error is null ? "shown" : "failed", error, desktop);
+    }
+
+    private static void ReportBadge(RemoteSignalingClient signaling, BadgeReport report,
                                     CancellationToken ct)
     {
         _ = Task.Run(async () =>
         {
             try
             {
-                await signaling.PostSignalAsync("recording", new
-                {
-                    recording_id = recordingId,
-                    badge = state,
-                    error,
-                    desktop,
-                }, ct);
+                await signaling.PostSignalAsync("recording", report.Payload(), ct);
             }
             catch (Exception e)
             {
-                Log.Warning(e, "reporting the recording badge ({State}) failed", state);
+                Log.Warning(e, "reporting the recording badge ({State}) failed", report.State);
             }
         }, ct);
     }

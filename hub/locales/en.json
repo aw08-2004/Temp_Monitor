@@ -60,6 +60,7 @@
       "are the ones who can apply it."
     ],
     "available": "Hub v{version} is available",
+    "available_image": "Hub v{version} is available. Pull the new container image to update.",
     "update_now": "Update now",
     "dismiss": "Dismiss",
     "updating": "Updating… the hub will restart shortly.",

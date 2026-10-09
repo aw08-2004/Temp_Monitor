@@ -1,0 +1,176 @@
+name: "Hub image"
+
+# Builds the hub's container image (hub/Dockerfile) and publishes it to GHCR. A container hub
+# never updates itself -- HUB_UPDATE_MODE=image -- so this workflow IS the hub's release path
+# for every hub that runs under Docker: a push to main that bumps HUB_VERSION becomes a tag an
+# operator can `docker compose pull`.
+#
+#   main -> ghcr.io/<owner>/temp_monitor-hub:X.Y.Z  and :latest
+#   beta -> ghcr.io/<owner>/temp_monitor-hub:beta-X.Y.Z  and :beta
+#
+# Beta gets its own prefix rather than sharing X.Y.Z, because promoting beta to main carries
+# the same HUB_VERSION across -- a shared tag would make main's build collide with beta's.
+#
+# **It refuses a version tag that already exists.** Every updater in this project asks "is the
+# other side strictly newer", so a reused HUB_VERSION is a release that silently reaches
+# nobody (VERSIONING.md; it has bitten twice). Overwriting the tag would be worse: two
+# different images under one version. Pull requests only build, to catch a broken
+# Dockerfile, a stale requirements.lock or a hub/ entry the Dockerfile does not copy before
+# it reaches main.
+#
+# **Plain docker and curl, no third-party actions.** A job holding `packages: write` should not
+# run code from tags someone else can move, and the docker/* actions bought nothing here that
+# `docker build` and `docker push` do not do. Dropping setup-buildx also drops its pull of
+# moby/buildkit from Docker Hub before every build, which is what failed this workflow's first
+# run. Inputs reach the scripts through env, never by `${{ }}` pasted into shell.
+#
+# The package is meant to be PUBLIC, like this repository, so a hub host pulls without a login.
+# GitHub creates every new package private, and visibility cannot be set from a workflow (there
+# is no API for it). The first publish is therefore followed by a one-time, one-way switch in
+# the package's settings: Danger Zone -> Change visibility -> Public. ROADMAP.MD owes it.
+
+# A push publishes, so it triggers only on hub/**: every hub/ change carries a HUB_VERSION
+# bump, and anything else has nothing to release. A push touching only this file or the lock
+# tool used to run the "already published" check against the unchanged version and go red
+# asking for a bump that would ship a no-op release to every hub (PR review). Pull requests
+# still trigger on all three, so a change to the workflow or the checker is built and checked
+# before it merges.
+on:
+  push:
+    branches: [main, beta]
+    paths:
+      - "hub/**"
+  pull_request:
+    branches: [main]
+    paths:
+      - "hub/**"
+      - "tools/lock_hub_requirements.py"
+      - ".github/workflows/hub-image.yml"
+
+concurrency:
+  group: hub-image-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  image:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Read HUB_VERSION
+        id: version
+        env:
+          OWNER: ${{ github.repository_owner }}
+          REF: ${{ github.ref_name }}
+        run: |
+          # The same pattern as app.parse_hub_version, so this reads exactly what the hubs
+          # compare -- and then the stricter rule from CLAUDE.md: three numeric components.
+          v=$(grep -oP '^HUB_VERSION\s*=\s*["\x27]\K[\d.]+(?=["\x27])' hub/app.py | head -n1)
+          if ! [[ "$v" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::HUB_VERSION '$v' is not MAJOR.MINOR.PATCH"
+            exit 1
+          fi
+          repo="$(printf '%s' "$OWNER" | tr '[:upper:]' '[:lower:]')/temp_monitor-hub"
+          if [[ "$REF" == "beta" ]]; then
+            version_tag="beta-${v}"; moving_tag="beta"
+          else
+            version_tag="${v}"; moving_tag="latest"
+          fi
+          {
+            echo "version=$v"
+            echo "repo=$repo"
+            echo "version_tag=$version_tag"
+            echo "moving_tag=$moving_tag"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Refuse a version that was already published
+        if: github.event_name == 'push'
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ACTOR: ${{ github.actor }}
+          REPO: ${{ steps.version.outputs.repo }}
+          TAG: ${{ steps.version.outputs.version_tag }}
+        run: |
+          # Asks the registry directly and reads the HTTP status, because "could not look" must
+          # not pass as "not there": the first version of this check took any failure of
+          # `docker manifest inspect` for absence, so a GHCR outage or an auth hiccup let the
+          # push overwrite a published tag -- the one thing this step exists to stop.
+          #
+          # The token asks for pull AND push, as `docker push` itself does. With pull alone GHCR
+          # answers "denied" for a package that does not exist yet, which is indistinguishable
+          # from a real auth failure and would block the very first publish.
+          reg_token=$(curl -fsS -u "${ACTOR}:${TOKEN}" \
+            "https://ghcr.io/token?service=ghcr.io&scope=repository:${REPO}:pull,push" | jq -er .token)
+          echo "::add-mask::${reg_token}"
+          code=$(curl -sS -o /dev/null -w '%{http_code}' -I \
+            -H "Authorization: Bearer ${reg_token}" \
+            -H "Accept: application/vnd.oci.image.index.v1+json, application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.docker.distribution.manifest.v2+json" \
+            "https://ghcr.io/v2/${REPO}/manifests/${TAG}")
+          case "$code" in
+            404) echo "ghcr.io/${REPO}:${TAG} is not published yet." ;;
+            200) echo "::error::ghcr.io/${REPO}:${TAG} already exists. Bump HUB_VERSION in hub/app.py -- a reused number is a release no hub will install."
+                 exit 1 ;;
+            *)   echo "::error::GHCR answered HTTP ${code} for ghcr.io/${REPO}:${TAG}, so whether it already exists is unknown. Refusing to publish rather than risk overwriting it; re-run once the registry answers."
+                 exit 1 ;;
+          esac
+
+      - name: Check requirements.lock is current
+        # Before any image work: a lock that no longer covers requirements.txt would build an
+        # image that crashes on import. Pure Python against the two files; no image needed.
+        run: python3 tools/lock_hub_requirements.py --check
+
+      - name: Pull the base image
+        run: |
+          # Pulled here, with retries, rather than by `docker build --pull`: Docker Hub's auth
+          # endpoint has timed out from GitHub's runners on this workflow's own runs (504s on
+          # auth.docker.io) while answering fine everywhere else. One flaky token request
+          # should cost a retry, not a red build. Read from the Dockerfile so the two never
+          # name different images.
+          base=$(awk 'toupper($1) == "FROM" { print $2; exit }' hub/Dockerfile)
+          for attempt in 1 2 3 4 5; do
+            if docker pull "$base"; then exit 0; fi
+            echo "::warning::pulling ${base} failed (attempt ${attempt} of 5); retrying"
+            sleep $((attempt * 15))
+          done
+          echo "::error::could not pull ${base} from its registry after 5 attempts"
+          exit 1
+
+      - name: Build
+        env:
+          REPO: ${{ steps.version.outputs.repo }}
+          VERSION: ${{ steps.version.outputs.version }}
+          VERSION_TAG: ${{ steps.version.outputs.version_tag }}
+          MOVING_TAG: ${{ steps.version.outputs.moving_tag }}
+          SOURCE: ${{ github.server_url }}/${{ github.repository }}
+          REVISION: ${{ github.sha }}
+        run: |
+          # The source label is what links the package to this repository on GHCR, so the
+          # repository's GITHUB_TOKEN can keep pushing to it after the first publish.
+          docker build \
+            --label "org.opencontainers.image.source=${SOURCE}" \
+            --label "org.opencontainers.image.version=${VERSION}" \
+            --label "org.opencontainers.image.revision=${REVISION}" \
+            --tag "ghcr.io/${REPO}:${VERSION_TAG}" \
+            --tag "ghcr.io/${REPO}:${MOVING_TAG}" \
+            hub
+
+      - name: Push
+        if: github.event_name == 'push'
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ACTOR: ${{ github.actor }}
+          REPO: ${{ steps.version.outputs.repo }}
+          VERSION_TAG: ${{ steps.version.outputs.version_tag }}
+          MOVING_TAG: ${{ steps.version.outputs.moving_tag }}
+        run: |
+          printf '%s' "$TOKEN" | docker login ghcr.io -u "$ACTOR" --password-stdin
+          # The version tag first: if the moving tag's push fails, `latest` still names the
+          # previous release rather than one whose own tag never landed.
+          docker push "ghcr.io/${REPO}:${VERSION_TAG}"
+          docker push "ghcr.io/${REPO}:${MOVING_TAG}"
+          docker logout ghcr.io

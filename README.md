@@ -232,6 +232,84 @@ format is narrower than it looks. (The installer offers to set
 `HUB_AUTO_UPDATE=1` for you; on hubs still on the older scheduled-task deployment the
 same exit instead relies on the task's 2-minute repetition.)
 
+**None of this applies to a hub running in Docker** — see the next section. There the image
+is the release, and the hub never updates itself.
+
+### Running the hub in Docker
+
+The hub also ships as a public container image, `ghcr.io/aw08-2004/temp_monitor-hub`, built
+by `.github/workflows/hub-image.yml` on every push to `main` that touches `hub/`. It is public,
+like the repository it is built from, so the hub host needs no `docker login`. It runs on
+Docker Engine (Linux) or Docker Desktop (Windows). Agents need no change as long as the
+public `HUB_URL` stays the same: they know only that URL and pin no certificate.
+
+```bash
+docker compose -f deploy/docker/compose.yaml up -d
+```
+
+| Tag | Follows |
+|---|---|
+| `X.Y.Z` | exactly that `HUB_VERSION`, never rebuilt |
+| `latest` | `main` |
+| `beta-X.Y.Z`, `beta` | the `beta` branch |
+
+Set `HUB_TAG` (for example `HUB_TAG=1.143.0`) to choose when a release goes in.
+
+**Updating is pull and recreate.** The image sets `HUB_UPDATE_MODE=image`, which switches off
+every in-place update path: the watcher, **Update now**, and the boot-time self-heal. They
+are switched off because an in-place update would write into the container's own layer and
+vanish on the next recreate, leaving the hub quietly back on an older version. The sidebar
+still announces a new version, but says to pull the image instead of offering a button.
+`hub.auto_update` and `HUB_AUTO_UPDATE` are ignored.
+
+```bash
+docker compose -f deploy/docker/compose.yaml pull
+```
+
+```bash
+docker compose -f deploy/docker/compose.yaml up -d
+```
+
+**All state is one volume**, `/state`: `.env`, `logs/` (the database, file spool, disk
+history, packages, firmware and the encrypted secret store) and `data/` (recordings). The
+`.env` lives on the volume rather than in compose's `environment:` because the hub **writes**
+to it: it adds `BACKUP_MASTER_KEY`, and the Settings pages save sign-in, TURN and AI values
+there. Don't set `HUB_STATE_DIR`, `HUB_LOG_DIR` or `HUB_RECORDINGS_DIR`; the image owns them.
+
+- **Named volume by default.** SQLite on a Docker Desktop bind mount is slow and its locking
+  is unreliable. On a Linux host a bind mount is fine, owned by uid `10001`.
+- **Exactly one container.** The schedulers, the database writer and Socket.IO's state live
+  in the process. A second replica, or waitress workers instead of threads, would run every
+  scheduled job twice.
+- **Behind the same proxy as before.** The port is published on loopback only. TLS stays at
+  the Cloudflare tunnel or nginx, which must not buffer responses (agents long-poll for
+  commands).
+- **Wake-on-LAN:** on the default bridge network the hub is never on a target's subnet, so
+  only agent-relayed wake works. That is the primary path anyway. On a Linux host,
+  `network_mode: host` in the compose file restores the hub's own magic packet.
+- **TURN** is unchanged: `turn/docker-compose.yml` on Linux, or the installer's WSL relay on
+  Windows.
+- **Dependencies are locked for the image.** `hub/requirements.txt` stays unpinned for the
+  Windows service. The image installs `hub/requirements.lock` instead: exact versions, every
+  wheel hash-checked, wheels only. After changing `requirements.txt`, run
+  `python tools/lock_hub_requirements.py` (it needs Docker) and commit the new lock.
+  `--check` names anything a stale lock is missing. The image workflow runs it before every
+  build, and so does the hub test suite.
+
+**Moving an existing Windows hub into Docker:**
+
+1. Stop the `FleetHub - Hub` service. Leave it installed; it is the way back.
+2. Create the volume, and copy `.env`, `logs\` and `data\` from
+   `C:\Program Files\FleetHub\Hub` into it with a one-off container. Then `chown -R
+   10001:10001 /state` from that container, and remove any `HUB_*_DIR` lines from the copied
+   `.env`.
+3. Run `docker compose up -d`, and point the tunnel or proxy origin at port 3001 on the
+   container host.
+4. Check that agents keep checking in. They need no reconfiguration.
+
+To roll back, stop the container, copy `logs\` back, and start the service. Database writes
+made after the cutover are lost unless they are copied back too.
+
 ### Migration to the C# agent (historical)
 
 Companion releases 2.10.0 through 2.12.0 migrated themselves: on a self-update they

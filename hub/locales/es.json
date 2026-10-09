@@ -45,6 +45,7 @@
   },
   "hub_update": {
     "available": "Hub v{version} está disponible",
+    "available_image": "Hub v{version} está disponible. Descarga la nueva imagen del contenedor para actualizar.",
     "update_now": "Actualizar ahora",
     "dismiss": "Descartar",
     "updating": "Actualizando… el hub se reiniciará en breve.",

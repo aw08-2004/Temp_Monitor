@@ -135,6 +135,11 @@ def init_recordings_db(db_path):
             )
             """
         )
+        # Added after the table shipped (hub 1.143.0), so an existing hub gains it here. The
+        # PC's own words for why a recording ended -- see finish().
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(recordings)")}
+        if "end_detail" not in columns:
+            conn.execute("ALTER TABLE recordings ADD COLUMN end_detail TEXT")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_recordings_owner ON recordings(owner)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_recordings_session "
                      "ON recordings(session_id)")
@@ -286,7 +291,7 @@ def create(db_path, *, session_id, machine, owner, reason, mime, now=None):
     return get(db_path, recording_id)
 
 
-def confirm_badge(db_path, recording_id, machine, state, now=None):
+def confirm_badge(db_path, recording_id, machine, state, now=None, detail=None):
     """The PC's helper reporting on its badge: `shown`, `hidden` or `failed`. Only the agent
     of the recording's own machine is heard -- the caller passes the machine its bearer token
     belongs to. Returns the recording after the report, or None if it is not this machine's.
@@ -297,7 +302,10 @@ def confirm_badge(db_path, recording_id, machine, state, now=None):
     recording has ended, so a `hidden` for one still live is a badge gone without being
     asked, and treating it as informational would leave video recording with nothing on
     screen (review of roadmap #19). For an ended recording it is the expected reply, and
-    finish() is a no-op."""
+    finish() is a no-op.
+
+    `detail` is the helper's own reason a badge failed ("could not attach to the input desktop
+    (win32 170)", and the desktop it was on), kept on the recording -- see finish()."""
     now = int(now if now is not None else time.time())
     rec = get(db_path, recording_id)
     if rec is None or rec["machine"] != machine:
@@ -309,7 +317,7 @@ def confirm_badge(db_path, recording_id, machine, state, now=None):
                 "WHERE id = ? AND status = ?",
                 (STATUS_RECORDING, now, now + SEGMENT_SECONDS, rec["id"], STATUS_STARTING))
     elif state in ("failed", "hidden"):
-        finish(db_path, rec["id"], END_BADGE_FAILED, actor=machine, now=now)
+        finish(db_path, rec["id"], END_BADGE_FAILED, actor=machine, now=now, detail=detail)
     return get(db_path, rec["id"])
 
 
@@ -380,20 +388,33 @@ def extend(db_path, recording_id, actor, now=None):
     return get(db_path, recording_id)
 
 
-def finish(db_path, recording_id, reason, actor="hub", now=None):
+# Long enough for a Win32 error and a desktop name, short enough that a misbehaving agent
+# cannot park a page of text on every recording row.
+END_DETAIL_MAX = 300
+
+
+def finish(db_path, recording_id, reason, actor="hub", now=None, detail=None):
     """End a live recording. Idempotent: returns False, and audits nothing, for one that had
     already ended. One that never got its badge confirmed ends as `failed`, because nothing
-    was recorded."""
+    was recorded.
+
+    `detail` is free text from whoever ended it -- today only the PC's helper, saying why the
+    badge would not go up. **Kept, not just logged**: `badge_failed` alone told the operator
+    "the PC could not show the badge" and nothing more, while the helper had sent the Win32
+    error that says which of half a dozen causes it was, and the hub dropped it on the floor.
+    Diagnosing that took a second trip to the PC. It is the agent's text, so it is capped and
+    rendered by the console as text, never markup."""
     now = int(now if now is not None else time.time())
+    detail = (str(detail).strip()[:END_DETAIL_MAX] or None) if detail else None
     rec = get(db_path, recording_id)
     if rec is None or rec["status"] not in LIVE_STATUSES:
         return False
     status = STATUS_ENDED if rec["status"] == STATUS_RECORDING else STATUS_FAILED
     with get_conn(db_path) as conn:
         cur = conn.execute(
-            "UPDATE recordings SET status = ?, ended_at = ?, end_reason = ? "
+            "UPDATE recordings SET status = ?, ended_at = ?, end_reason = ?, end_detail = ? "
             "WHERE id = ? AND status IN (?, ?)",
-            (status, now, str(reason), rec["id"], *LIVE_STATUSES))
+            (status, now, str(reason), detail, rec["id"], *LIVE_STATUSES))
         if (cur.rowcount or 0) != 1:
             return False
     ended = get(db_path, rec["id"])
@@ -401,7 +422,7 @@ def finish(db_path, recording_id, reason, actor="hub", now=None):
                 target=rec["machine"],
                 detail={"recording_id": rec["id"], "reason": str(reason), "status": status,
                         "duration_seconds": ended["duration_seconds"],
-                        "size_bytes": ended["size_bytes"]})
+                        "size_bytes": ended["size_bytes"], "detail": detail})
     return True
 
 

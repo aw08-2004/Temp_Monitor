@@ -157,7 +157,7 @@ if _env_acl_note:
 # ================================
 # Bump on every push to main and restart the hub service -- shown in the
 # dashboard header so a stale/un-restarted deployment is obvious at a glance.
-HUB_VERSION = "1.142.0"
+HUB_VERSION = "1.143.0"
 CHECK_INTERVAL = 5
 SPIKE_THRESHOLD = 10
 LHM_URL = "http://localhost:8085/data.json"
@@ -166,6 +166,17 @@ HUB_URL = os.environ.get("HUB_URL", "http://localhost:5000")
 # operator sets HUB_AUTO_UPDATE=1 in the real hub's .env. The Settings tab can
 # override this per-hub -- see hub_auto_update_enabled() and hub_update_watcher().
 HUB_AUTO_UPDATE_ENV = os.environ.get("HUB_AUTO_UPDATE", "").strip().lower() in ("1", "true", "yes", "on")
+# How a new hub version reaches this process. "self" (the default) is the in-place updater
+# below: git reset or archive swap, pip install, os._exit for WinSW to relaunch. "image" is
+# set by hub/Dockerfile and means the image is the release -- an update is `docker compose
+# pull` plus a recreate. **In image mode the hub must never update itself**: an in-place
+# update writes into the container's own layer, survives a restart, and silently vanishes on
+# the next recreate, so the hub drifts back to whatever version the image carries while the
+# console last said it was newer. Mounting hub/ as a volume to keep self-update working was
+# rejected -- the image would stop being the source of truth, and pip would still write into
+# the image's site-packages. Anything other than "image" means "self", so a typo fails safe
+# to today's behaviour rather than to a hub that can never be updated.
+HUB_UPDATE_MODE = "image" if os.environ.get("HUB_UPDATE_MODE", "").strip().lower() == "image" else "self"
 # Suppresses the outbound version reads this process makes on its own -- the agent-manifest
 # watcher that fills in `latest_agent_version`. **For the test suite, and named so that is
 # obvious**: importing app.py starts that watcher, which immediately fetches every manifest
@@ -1892,6 +1903,11 @@ def perform_hub_update(code_dir):
     The strategy reporting success is not on its own a reason to restart -- see
     _tree_version_is_newer, which is asked here so that BOTH callers (the watcher and the
     operator-triggered worker) get the check without either having to remember it."""
+    if HUB_UPDATE_MODE == "image":
+        # Defence in depth -- the watcher and the POST route both refuse first. See
+        # HUB_UPDATE_MODE for why an in-container update is worse than none.
+        print("[hub-update] HUB_UPDATE_MODE=image: not updating in place; pull the new image.")
+        return False
     worktree_root = os.path.dirname(os.path.abspath(code_dir))
     if os.path.isdir(os.path.join(worktree_root, ".git")):
         applied = _perform_hub_update_git(worktree_root)
@@ -1920,7 +1936,12 @@ def hub_auto_update_enabled():
     Keeping unset distinct from false is what lets Settings default to "whatever this
     deployment was already configured to do" rather than silently overriding .env the
     first time anyone opens the page.
+
+    **Always False in image mode**, whatever the setting says: a DB restored from the
+    Windows install may well carry hub.auto_update = True.
     """
+    if HUB_UPDATE_MODE == "image":
+        return False
     override = settings.get_bool(DB_PATH, "hub.auto_update")
     return HUB_AUTO_UPDATE_ENV if override is None else bool(override)
 
@@ -6270,6 +6291,9 @@ def get_hub_version_info():
         "update_available": hub_update_available(),
         # The notice stays out of the way when the hub will install this by itself.
         "auto_update": hub_auto_update_enabled(),
+        # "image" tells the notice to say "pull the image" instead of offering a button
+        # that would only be refused.
+        "update_mode": HUB_UPDATE_MODE,
         "status": state["status"],
         "error": state["error"],
     }), 200
@@ -6284,6 +6308,8 @@ def post_hub_update():
     reaching an endpoint that pulls and runs code from main. See settings_web.py's module
     docstring -- the same reasoning, one step further along."""
     request.get_json(silent=True)
+    if HUB_UPDATE_MODE == "image":
+        return jsonify({"error": "this hub runs from a container image -- pull the new image instead"}), 409
     if get_hub_update_state()["status"] == "running":
         return jsonify({"error": "an update is already running"}), 409
     latest = get_latest_hub_version()
@@ -6583,6 +6609,8 @@ def inject_nav_context():
                # its poller has run once. The template also gates on MANAGE_SETTINGS.
                "latest_hub_version": get_latest_hub_version(),
                "hub_update_available": _hub_update_notice_visible(),
+               # "image": the notice names the image to pull and offers no button.
+               "hub_update_mode": HUB_UPDATE_MODE,
                # CSRF token for the meta tag; _get_or_create_csrf_token is safe to
                # call on every render -- it only creates a token when the session
                # does not already carry one.

@@ -278,6 +278,42 @@ seen on a real desktop with `--recording-badge-test`. Still owed:
 - **A real recording end to end:** start, extend at the countdown, switch PCs on the Remote
   page, stop; play and download it from Recordings; share it with a group and check a member
   can watch and a non-member cannot.
+- **First real attempt failed (reported 2026-10-09):** "Recording failed: the PC could not show
+  the recording badge" on AIO-HOBBY, three times in a row. The helper reported `failed` with
+  *could not attach to the input desktop (win32 170)*, which is `ERROR_BUSY` from
+  `SetThreadDesktop`. The hub had discarded that reason; it was recovered from
+  `remote_signals`. From hub 1.143.0 the reason is kept on the recording (`end_detail`), shown
+  after the message and written to the `recording_end` audit entry. That makes the next
+  failure diagnosable from the console instead of from the database.
+- **Cause found and fixed in source, 2026-10-09; owed as agent 3.43.1.** The badge thread
+  was started as an STA. The runtime initialises COM before the thread's first line, and the
+  first STA in a process gets COM's hidden, message-only `OleMainThreadWndClass` window at
+  that moment. A thread that owns a window cannot `SetThreadDesktop`, even to a new handle of
+  the desktop it is already on. `EnumThreadWindows` does not list message-only windows, so
+  the thread looked empty. The badge thread now starts as an MTA, attaches, and then switches
+  to STA (`TrySetApartmentState(Unknown)` then `STA`). Setting STA after the attach without
+  `Unknown` does not work, because on .NET 10 a thread with no apartment set is already MTA.
+  The same change closes a badge that comes up after its timeout, which used to stay on
+  screen for the rest of the session, and reports the desktop with a failure.
+  `RecordingBadgeTests` pins all of this against a private desktop, with no SYSTEM rights
+  needed. Each test failed on the old code, and the suite stays at 595/595. Still owed:
+  - **Cut agent 3.43.1** (`agent/release.ps1 -Version 3.43.1`; a PATCH, nothing new to gate).
+  - **Verify as SYSTEM:** record a real session on AIO-HOBBY, then press Win+L to check the
+    follow to Winlogon. The tests prove the attach only as an ordinary user against a private
+    desktop.
+
+**7. Hub in Docker (#28), owed on the hub host.** Image, compose file and publishing workflow
+built 2026-10-09 (hub 1.143.0). The image was built and run locally against a scratch volume:
+healthy, image mode on, state kept across a recreate, `.env` writable. Still owed:
+- **The first GHCR publish:** merge to `main` and confirm the workflow pushes `1.143.0` and
+  `latest`. **Then make the package public** (owner decision, 2026-10-09): GitHub creates every
+  new package private, and visibility can only be changed by hand. Go to the package's
+  *Package settings* → *Danger Zone* → *Change visibility* → *Public*. This is one-way. Until
+  then, `docker compose pull` fails on a host with no `docker login ghcr.io`.
+- **The cutover** in README → *Running the hub in Docker*: stop the service, copy `.env`,
+  `logs\` and `data\` into the volume, `up -d`, and repoint the tunnel. Then confirm through
+  the **tunnel hostname** that agents heartbeat, long-poll and transfer files, and that the
+  console's Live view works (the same non-buffering check as 4d).
 
 ---
 
@@ -5316,6 +5352,68 @@ for one disk, kept thirty days. This entry adds three things:
 - Rules variables `disk.<letter>.days_to_full` and `disk.<letter>.bytes_per_day`.
 - The Linux agent: no MFT. `du`-style walks of `/home` and `/var` would be the equivalent, at a
   very different cost.
+
+---
+
+## 🚧 28. Hub in a container   ·   hub 1.143.0   ·   `hub/Dockerfile`, `deploy/docker/compose.yaml`, `.github/workflows/hub-image.yml`
+
+The hub ran only as a WinSW Windows Service on system Python, installed by `install.ps1`. This
+entry adds a container image that runs on Docker Engine or Docker Desktop, so the hub host no
+longer has to be the Windows box. The cutover itself is owed locally, item 7.
+
+### Built · hub 1.143.0
+- **`HUB_UPDATE_MODE`**, either `self` (the default, unchanged) or `image` (set by the
+  Dockerfile). Image mode refuses every in-place update path: the watcher, `POST
+  /api/hub/update`, `perform_hub_update` and the `wsgi.py` self-heal. The watcher still reads
+  `main`, so the sidebar can say *"pull the new container image"*. A restored
+  `hub.auto_update = true` is ignored. Pinned by `tests/test_hub_update_mode.py`.
+- **The image:** `python:3.13-slim`, non-root uid 10001, `HUB_STATE_DIR=/state` as a single
+  volume, and the same `waitress-serve --threads=128` the service runs. The health check is
+  the installer's GET of `/`.
+- **Publishing:** GHCR, with tag `X.Y.Z` and `latest` from `main`, and `beta-X.Y.Z` and
+  `beta` from `beta`. The package is **public**, the same as the repository it is built from,
+  so a hub host pulls it without credentials. It refuses a malformed `HUB_VERSION` or a tag that already exists. Pull
+  requests build without pushing.
+
+### Decisions
+- **The image is the release.** Updating is `docker compose pull && up -d`. An in-place
+  update inside a container writes to the container layer. It survives a restart and vanishes
+  on the next recreate, so the hub silently drifts back to an older version.
+- **`.env` stays a file on the volume.** It is not compose `environment:`, because the hub
+  writes to it at runtime (`BACKUP_MASTER_KEY`, and the sign-in, TURN and AI settings).
+- **One container, one process.** About a dozen schedulers, the `db_writer`, Socket.IO in
+  threading mode and the in-memory caches all assume they are alone.
+- **A named volume by default:** SQLite on Docker Desktop bind mounts is slow, and its
+  locking is unreliable.
+- **The image pins and hash-checks its dependencies; `requirements.txt` does not.** The image
+  installs `hub/requirements.lock`, generated by `tools/lock_hub_requirements.py`, with
+  `--require-hashes --only-binary :all:`. `lock_hub_requirements.py --check` fails CI and the
+  hub suite when the lock no longer covers `requirements.txt`. The Windows service stays
+  unpinned, because pins there would fight the operator's interpreter. The check briefly lived
+  in the Dockerfile as an unlocked `pip install --no-index`, but SonarCloud rightly flags an
+  unlocked install in an image build, and the check needs no image to run.
+- **The Dockerfile names what it copies**, not `COPY .`, so stray files in a working tree
+  cannot reach a published image. A list like that once missed a new module and crash-looped
+  the hub, so `tests/test_hub_update_mode.py` fails when `hub/` gains an entry the
+  Dockerfile does not copy.
+- **The workflow uses plain `docker` and `curl`, no third-party actions.** A job with
+  `packages: write` runs nothing from tags someone else can move. The duplicate-tag check
+  reads the registry's HTTP status and fails closed on anything but 200 or 404, so a
+  registry error cannot let a push overwrite a published tag (PR review).
+
+### Rejected alternatives
+- **Mounting `hub/` as a volume to keep self-update.** The image would stop describing what
+  runs, and pip would still write into the image's site-packages.
+- **Gunicorn workers or replicas.** Every scheduler would run once per process against the
+  same SQLite files, and the command-push bells would quietly degrade to polling.
+- **WebSockets.** Waitress cannot serve them. Polling-only Socket.IO is unchanged.
+- **Watchtower by default.** It would pick when a release goes in, behind the operator's back.
+  It is documented as optional, and pinning `HUB_TAG` is the default control.
+
+### Not done
+- **An `install.ps1` menu option** for a Docker hub. The cutover is manual and documented.
+- **Hub-side Wake-on-LAN on a bridge network.** Only `network_mode: host` on a Linux host
+  restores it. Agent-relayed wake is unaffected.
 
 ---
 

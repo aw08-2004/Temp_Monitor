@@ -48,8 +48,12 @@
         size_limit: () => t('recordings.end_reason.size_limit'),
     };
 
-    function endReasonText(code) {
-        return (END_REASON_TEXT[code] || END_REASON_TEXT.stopped)();
+    // `detail` is the PC's own reason, when it sent one (a badge that would not go up says
+    // which Win32 call failed). Appended as plain text: it comes from the agent, and every
+    // caller puts this string into textContent.
+    function endReasonText(code, detail) {
+        const text = (END_REASON_TEXT[code] || END_REASON_TEXT.stopped)();
+        return detail ? `${text} (${detail})` : text;
     }
 
     function pickMime() {
@@ -142,7 +146,7 @@
                 if (poll.ok) adopt(poll.data);
                 if (rec.status === 'recording') break;
                 if (rec.status === 'failed' || rec.status === 'ended') {
-                    setState('failed', { error: endReasonText(rec.end_reason) });
+                    setState('failed', { error: endReasonText(rec.end_reason, rec.end_detail) });
                     return;
                 }
             }

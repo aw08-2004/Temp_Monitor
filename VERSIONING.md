@@ -123,6 +123,12 @@ was rendering while marked `hidden` because a `display: flex` outranked the UA s
 deployed hub, whether or not `HUB_AUTO_UPDATE` is on. A push that only touches docs or
 `tests/` needs no bump, because there is nothing for a hub to install.
 
+The same number is the hub's **container image tag**. `.github/workflows/hub-image.yml`
+publishes `ghcr.io/<owner>/temp_monitor-hub:X.Y.Z` from `main`, and `beta-X.Y.Z` from
+`beta`. It **fails** if `HUB_VERSION` is not three numeric components, or if that tag already
+exists. A reused number never overwrites an image: the push fails, and a container hub
+cannot install a release that has no new tag.
+
 **Agent and client — only when cutting a release.** The number means "what is signed and
 downloadable", so it moves in `agent/release.ps1` / `release_client.py`, not in the commit
 that writes the feature. Source that sits on `main` unreleased keeps the old number; the

@@ -134,6 +134,13 @@ def test_badge_gate():
     recordings.confirm_badge(db, rec3["id"], "PC-01", "hidden", now=1005)
     check("...and the expected hidden after an ending changes nothing",
           recordings.get(db, rec3["id"])["ended_at"] == 1004)
+    rec4 = new(db, session="s4")
+    recordings.confirm_badge(db, rec4["id"], "PC-01", "failed", now=1003,
+                             detail="x" * (recordings.END_DETAIL_MAX + 50))
+    check("the PC's reason is kept, capped",
+          recordings.get(db, rec4["id"])["end_detail"] == "x" * recordings.END_DETAIL_MAX)
+    check("...and an ending without one keeps none",
+          recordings.get(db, rec2["id"])["end_detail"] is None)
     recordings.confirm_badge(db, rec["id"], "PC-01", "failed", now=1004)
     got = recordings.get(db, rec["id"])
     check("...and ends a running one (the lock screen it could not follow)",

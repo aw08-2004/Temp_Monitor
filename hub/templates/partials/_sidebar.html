@@ -293,8 +293,15 @@
                 aria-label="{{ t('hub_update.dismiss') }}" title="{{ t('hub_update.dismiss') }}">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
         </button>
+        {# A container hub (HUB_UPDATE_MODE=image) cannot apply this itself -- the operator pulls
+           the image -- so it gets the pull sentence and no button that would only be refused. #}
+        {% if hub_update_mode == 'image' %}
+        <p class="sidebar__update-text" id="hub-update-text">{{ t('hub_update.available_image', version=latest_hub_version or '') }}</p>
+        {% else %}
         <p class="sidebar__update-text" id="hub-update-text">{{ t('hub_update.available', version=latest_hub_version or '') }}</p>
-        <button type="button" class="btn btn--ghost sidebar__update-action" id="hub-update-action">
+        {% endif %}
+        <button type="button" class="btn btn--ghost sidebar__update-action" id="hub-update-action"
+                {% if hub_update_mode == 'image' %}hidden{% endif %}>
             {{ t('hub_update.update_now') }}
         </button>
     </div>

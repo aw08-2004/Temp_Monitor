@@ -123,6 +123,14 @@ public sealed class InputDesktopWatcher : IDisposable
 /// the life of the thread. That is why the capture and input loops run on dedicated threads
 /// rather than the thread pool: a pool thread that once created a window (the consent banner
 /// used to) poisons every later attempt to attach.
+///
+/// It must also not be an STA. The first STA in a process owns COM's hidden, message-only
+/// OleMainThreadWndClass window from birth, before any of its code runs, and any other STA
+/// gets one at its first pumping wait (every managed wait on an STA pumps). EnumThreadWindows
+/// lists neither -- so an STA fails here with ERROR_BUSY while looking as if it owns nothing,
+/// or passes only until it has waited on something. The capture and input threads are MTA for
+/// that reason as much as for D3D11 and Media Foundation; the recording badge attaches first
+/// and becomes an STA afterwards.
 /// </summary>
 public sealed class ThreadDesktopBinder : IDisposable
 {
