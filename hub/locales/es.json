@@ -2667,6 +2667,7 @@
       "truncated": "Respondieron más equipos de los que el hub guarda; solo se muestran los primeros.",
       "nothing_found": "Nada más respondió en esta subred.",
       "no_subnets_help": "Este PC aún no ha informado de una dirección en ninguna subred, así que no hay nada que barrer.",
+      "private_mac": "Dirección privada (elegida por el dispositivo)",
       "state": {
         "scanning": "Barriendo",
         "done": "Barrida",

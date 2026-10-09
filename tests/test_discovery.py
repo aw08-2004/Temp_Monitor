@@ -177,6 +177,12 @@ def main():
               by_ip["10.4.7.31"]["classification"] == discovery.CLASS_RELAY)
         check("an unrecognised MAC is unmanaged",
               by_ip["10.4.7.50"]["classification"] == discovery.CLASS_UNMANAGED)
+        # The maker line (hub/oui.py): looked up on read like the verdict, so every host
+        # carries it. AA:... has the locally-administered bit set -- a device-chosen address.
+        check("every host carries a vendor and a private-address flag",
+              all("vendor" in h and "private_mac" in h for h in hosts))
+        check("a device-chosen MAC is flagged private instead of being looked up",
+              by_ip["10.4.7.31"]["private_mac"] is True and by_ip["10.4.7.31"]["vendor"] is None)
 
         counts = discovery.count_by_class(hosts)
         check("every class is present with a zero rather than omitted",

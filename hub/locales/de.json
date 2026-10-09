@@ -2667,6 +2667,7 @@
       "truncated": "Es haben mehr Hosts geantwortet, als der Hub speichert; es werden nur die ersten davon angezeigt.",
       "nothing_found": "Sonst hat nichts in diesem Subnetz geantwortet.",
       "no_subnets_help": "Dieser PC hat noch keine Adresse in einem Subnetz gemeldet, also gibt es nichts zu durchsuchen.",
+      "private_mac": "Private Adresse (vom Gerät gewählt)",
       "state": {
         "scanning": "Wird durchsucht",
         "done": "Durchsucht",

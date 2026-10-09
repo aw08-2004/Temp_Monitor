@@ -2780,6 +2780,7 @@
       "truncated": "More hosts answered than the hub will store; only the first of them are shown.",
       "nothing_found": "Nothing else answered on this subnet.",
       "no_subnets_help": "This PC has not reported an address on any subnet yet, so there is nothing it can sweep.",
+      "private_mac": "Private address (chosen by the device)",
       "state": {
         "scanning": "Sweeping",
         "done": "Swept",
