@@ -138,6 +138,12 @@ def init_recordings_db(db_path):
         conn.execute("CREATE INDEX IF NOT EXISTS idx_recordings_owner ON recordings(owner)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_recordings_session "
                      "ON recordings(session_id)")
+        # One LIVE recording per session, enforced by the database rather than by create()'s
+        # read-then-insert: two Start requests racing (a double click, a retried request)
+        # could both read "none live" and both insert, and a viewer records one stream
+        # (review on #116). Partial, so a session's ended recordings do not count.
+        conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_recordings_one_live "
+                     "ON recordings(session_id) WHERE status IN ('starting', 'recording')")
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS recording_shares (
@@ -157,14 +163,28 @@ def init_recordings_db(db_path):
 # ================================
 # WHERE THE FILES LIVE
 # ================================
+_FOLDER_SAFE = frozenset("abcdefghijklmnopqrstuvwxyz0123456789@._+-")
+
+
 def owner_folder(owner):
     """The directory name for one owner: their email, lowercased, with anything outside a
-    conservative set replaced. The email is identity here (permissions.normalize_email), and
-    an operator looking at the disk can tell whose folder is whose -- which a hash would hide.
-    Never empty, never `.` or `..`, so it cannot climb out of the root."""
+    conservative set percent-encoded. The email is identity here
+    (permissions.normalize_email), and an operator looking at the disk can tell whose folder
+    is whose -- which a hash would hide.
+
+    ENCODED, not replaced: replacing every odd character with `_` sent `a+b@x.com` and
+    `a_b@x.com` to one folder (review on #116), so the folder no longer said whose it was.
+    An encoding is one-to-one. A leading or trailing dot is encoded too, so the name is never
+    `.` or `..` and never one Windows silently trims -- it cannot climb out of the root."""
     email = permissions.normalize_email(owner) or ""
-    safe = re.sub(r"[^a-z0-9@._-]", "_", email).strip(".")
-    return safe or "_unknown"
+    out = []
+    for i, ch in enumerate(email):
+        edge_dot = ch == "." and (i == 0 or i == len(email) - 1)
+        if ch in _FOLDER_SAFE and not edge_dot:
+            out.append(ch)
+        else:
+            out.extend(f"%{b:02X}" for b in ch.encode("utf-8"))
+    return "".join(out) or "_unknown"
 
 
 _RECORDING_ID = re.compile(r"[0-9a-f]{32}")
@@ -244,16 +264,21 @@ def create(db_path, *, session_id, machine, owner, reason, mime, now=None):
     mime = str(mime or "").strip()
     if not ALLOWED_MIME.match(mime):
         raise ValueError("Recordings must be WebM video.")
+    already = "This session is already being recorded."
     if live_for_session(db_path, session_id):
-        raise ValueError("This session is already being recorded.")
+        raise ValueError(already)
     now = int(now if now is not None else time.time())
     recording_id = uuid.uuid4().hex
-    with get_conn(db_path) as conn:
-        conn.execute(
-            "INSERT INTO recordings(id, session_id, machine, owner, reason, status, mime, "
-            "created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            (recording_id, str(session_id), str(machine), permissions.normalize_email(owner),
-             reason, STATUS_STARTING, mime, now))
+    try:
+        with get_conn(db_path) as conn:
+            conn.execute(
+                "INSERT INTO recordings(id, session_id, machine, owner, reason, status, mime, "
+                "created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (recording_id, str(session_id), str(machine),
+                 permissions.normalize_email(owner), reason, STATUS_STARTING, mime, now))
+    except sqlite3.IntegrityError:
+        # The race the check above cannot see: idx_recordings_one_live refused the second.
+        raise ValueError(already)
     fleet.audit(db_path, actor=owner, action="recording_start", level=fleet.LEVEL_SECURITY,
                 target=str(machine),
                 detail={"recording_id": recording_id, "session_id": str(session_id),

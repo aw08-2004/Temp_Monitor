@@ -85,6 +85,15 @@ def test_create():
     check("...owned by the normalised email", rec["owner"] == "ann@x.com")
     check("one session cannot be recorded twice at once",
           raises(ValueError, new, db))
+    # Two Start requests racing both get past the read; the database must refuse the second.
+    real = recordings.live_for_session
+    recordings.live_for_session = lambda *_a, **_k: []
+    try:
+        raced = raises(ValueError, new, db)
+    finally:
+        recordings.live_for_session = real
+    check("...even when a racing request got past the check",
+          raced and len(recordings.live_for_session(db, "s1")) == 1)
     audit = fleet.list_audit(db, action="recording_start")["entries"]
     check("the start is audited with who, which PC and why",
           audit and audit[0]["actor"] == "ann@x.com" and audit[0]["target"] == "PC-01"
@@ -238,9 +247,14 @@ def test_sharing():
 def test_storage():
     print("\n-- where the files live, and deleting them --")
     db, root = setup()
+    climbing = recordings.owner_folder("../../etc@x.com")
     check("an owner folder cannot climb out of the root",
-          recordings.owner_folder("../../etc@x.com").startswith("_")
-          and ".." not in recordings.owner_folder("../../etc@x.com").split(os.sep))
+          os.sep not in climbing and "/" not in climbing and not climbing.startswith("."))
+    check("...and two different emails never share one",
+          recordings.owner_folder("a+b@x.com") != recordings.owner_folder("a_b@x.com")
+          and recordings.owner_folder("o'neil@x.com") != recordings.owner_folder("o_neil@x.com"))
+    check("...while an ordinary address stays readable",
+          recordings.owner_folder("Ann.Lee@X.com") == "ann.lee@x.com")
     check("...and is never empty", recordings.owner_folder("") == "_unknown")
     rec = new(db)
     path = recordings.file_path(root, rec)
