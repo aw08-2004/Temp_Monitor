@@ -679,6 +679,24 @@ def _store_record(conn, machine, record, now):
     return True
 
 
+def _read_report(payload):
+    """(entries, dropped, error, collected_version) out of one heartbeat's events object,
+    leniently -- see record_events for why nothing here raises."""
+    if not isinstance(payload, dict):
+        payload = {"events": payload if isinstance(payload, list) else []}
+    entries = payload.get("events")
+    entries = entries if isinstance(entries, list) else []
+    try:
+        dropped = max(0, int(payload.get("dropped") or 0))
+    except (TypeError, ValueError):
+        dropped = 0
+    error = str(payload.get("error") or "").strip()[:500] or None
+    # The document this report was filtered with (agent 3.42.0+). Absent from an older agent,
+    # which stores NULL and keeps the timestamp comparison -- see rule_counters.
+    collected_version = str(payload.get("version") or "").strip()[:64] or None
+    return entries, dropped, error, collected_version
+
+
 def record_events(db_path, machine, payload):
     """Store what one machine's heartbeat carried. Returns (stored, rolled_up).
 
@@ -692,18 +710,7 @@ def record_events(db_path, machine, payload):
     Never raises on content: see `_normalize`. It raises only on a database that is not
     there, which is a hub problem rather than a report problem.
     """
-    if not isinstance(payload, dict):
-        payload = {"events": payload if isinstance(payload, list) else []}
-    entries = payload.get("events")
-    entries = entries if isinstance(entries, list) else []
-    try:
-        dropped = max(0, int(payload.get("dropped") or 0))
-    except (TypeError, ValueError):
-        dropped = 0
-    error = str(payload.get("error") or "").strip()[:500] or None
-    # The document this report was filtered with (agent 3.42.0+). Absent from an older agent,
-    # which stores NULL and keeps the timestamp comparison -- see rule_counters.
-    collected_version = str(payload.get("version") or "").strip()[:64] or None
+    entries, dropped, error, collected_version = _read_report(payload)
 
     now = int(time.time())
     # The agent caps too, and the hub caps again rather than trusting it. Nothing here is

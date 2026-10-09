@@ -142,11 +142,7 @@ public sealed class HubRelayClient : IRemoteMediaSink, IDisposable
 
             var batch = TakeBatch();
             if (batch is null) continue;
-            // Every queued item released the semaphore once; this batch consumed them all.
-            while (_pending.CurrentCount > 0)
-            {
-                if (!await _pending.WaitAsync(0, ct)) break;
-            }
+            await DrainPendingAsync(ct);
 
             var body = RelayFraming.Frame(batch);
             var outcome = await UploadOnceAsync(body, ct);
@@ -164,6 +160,17 @@ public sealed class HubRelayClient : IRemoteMediaSink, IDisposable
                 firstAccepted = true;
                 _log($"hub relay: first upload accepted ({body.Length} bytes)");
             }
+        }
+    }
+
+    /// <summary>Every queued item released the semaphore once, and the batch just taken
+    /// consumed them all -- so its count is spent, and leaving it would wake the loop for empty
+    /// batches.</summary>
+    private async Task DrainPendingAsync(CancellationToken ct)
+    {
+        while (_pending.CurrentCount > 0 && await _pending.WaitAsync(0, ct))
+        {
+            // Each successful wait takes one count; the condition does the work.
         }
     }
 

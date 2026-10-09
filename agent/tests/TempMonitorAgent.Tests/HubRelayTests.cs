@@ -28,6 +28,20 @@ public class HubRelayTests
     }
 
     [Fact]
+    public void GeometryMessage_StartsWithTheBytesTheHubLooksFor()
+    {
+        // hub/remote_relay.py's _is_geom matches on the exact prefix {"t":"geom" so that it
+        // need not parse every status record on the upload path. A serializer change that
+        // reordered or spaced the fields would make a resynced viewer lose its click mapping
+        // silently -- so the real message, not a hand-written copy of it, is checked here.
+        var json = RemoteHelper.GeometryMessage(
+            new CaptureEncodePipeline.Geometry(1920, 1080, "Winlogon", "H.264 (software)", 0, 2));
+        Assert.StartsWith("{\"t\":\"geom\",", json);
+        Assert.Contains("\"w\":1920", json);
+        Assert.Contains("\"monitors\":2", json);
+    }
+
+    [Fact]
     public void Frame_OfNothingIsEmpty() =>
         Assert.Empty(RelayFraming.Frame(new List<(byte, byte, byte[])>()));
 

@@ -361,19 +361,8 @@ public static class RemoteHelper
                 {
                     pendingGeometry.Set(g);
                     // Through the router, not the peer: on the relay this is how the viewer
-                    // learns the capture size at all (remote_relay keeps the newest one for a
-                    // viewer that joins late), and the serializer's field order -- "t" first --
-                    // is what the hub's byte test for it relies on.
-                    router.SendControl(JsonSerializer.Serialize(new
-                    {
-                        t = "geom",
-                        w = g.Width,
-                        h = g.Height,
-                        desktop = g.Desktop,
-                        encoder = g.Encoder,
-                        monitor = g.Monitor,
-                        monitors = g.MonitorCount,
-                    }));
+                    // learns the capture size at all.
+                    router.SendControl(GeometryMessage(g));
                 },
                 OnStall: desktop =>
                 {
@@ -503,6 +492,26 @@ public static class RemoteHelper
             catch (Exception e) { Log.Warning("input event failed: {Msg}", e.Message); }
         }
     }
+
+    /// <summary>The <c>geom</c> status message the viewer maps clicks with.
+    ///
+    /// One method rather than inline because the hub reads its leading bytes: remote_relay
+    /// keeps the newest geom record for a viewer that joins late or resyncs, and recognises it
+    /// by the exact prefix <c>{"t":"geom"</c> rather than parsing every status record on the
+    /// upload path. So "t" must stay the first field and the serializer must not add spacing --
+    /// a drift here costs a relayed viewer its click mapping with no error anywhere, which is
+    /// why HubRelayTests pins this method's output.</summary>
+    internal static string GeometryMessage(CaptureEncodePipeline.Geometry g) =>
+        JsonSerializer.Serialize(new
+        {
+            t = "geom",
+            w = g.Width,
+            h = g.Height,
+            desktop = g.Desktop,
+            encoder = g.Encoder,
+            monitor = g.Monitor,
+            monitors = g.MonitorCount,
+        });
 
     /// <summary>Handle a <c>{"t":"cfg", ...}</c> message from the viewer -- a live quality
     /// change -- or a <c>{"t":"key"}</c> request for a fresh keyframe, which only the hub relay's
