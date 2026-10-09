@@ -218,6 +218,22 @@ def test_endings(db, root, c, auth):
           r.status_code == 409
           and r.get_json()["recording"]["end_reason"] == recordings.END_SESSION_ENDED)
 
+    if sys.platform == "win32":
+        # A delete refused because a colleague's player holds the file open has still ended
+        # the recording, so the PC's badge must come down all the same.
+        sid5 = open_session(c, auth)
+        rid5 = start(c, sid5).get_json()["id"]
+        ack(c, sid5, rid5, auth)
+        chunk(c, rid5, 0, b"HELD")
+        with open(recordings.file_path(root, recordings.get(db, rid5)), "rb"):
+            refused = c.delete(f"/api/recordings/{rid5}")
+        signals = c.get(f"/api/agent/remote/{sid5}/poll?after_seq=0", headers=auth).get_json()
+        down = [s for s in signals["signals"]
+                if s["kind"] == "record" and s["payload"] == {"recording_id": rid5, "on": False}]
+        check("a delete refused over a held file still takes the badge down",
+              refused.status_code == 409 and len(down) == 1
+              and recordings.get(db, rid5)["status"] == recordings.STATUS_ENDED)
+
     sid3 = open_session(c, auth)
     rid3 = start(c, sid3).get_json()["id"]
     ack(c, sid3, rid3, auth)

@@ -355,7 +355,12 @@ class _RecordingRoutes:
             recordings.delete(self.db_path, self.root, rec, actor=self.me())
         except ValueError as e:
             return refusals.refuse(e, 409)
-        self.drop_badge(dict(rec, status=recordings.STATUS_ENDED))
+        finally:
+            # In a finally because delete() ends a live recording BEFORE it tries the file.
+            # A delete refused over a file somebody is reading has still ended the recording,
+            # and reconcile() never revisits an ended one -- so a badge left up here would
+            # stay on the PC until the session went (review of roadmap #19).
+            self.drop_badge(dict(rec, status=recordings.STATUS_ENDED))
         return jsonify({"status": "deleted"}), 200
 
 
