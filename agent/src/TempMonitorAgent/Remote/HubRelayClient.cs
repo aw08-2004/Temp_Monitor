@@ -83,8 +83,8 @@ public sealed class HubRelayClient : IRemoteMediaSink, IDisposable
     public void Start()
     {
         _settings.RequestKeyframe();
-        _ = Task.Run(() => UploadLoopAsync(_cts.Token));
-        _ = Task.Run(() => InputLoopAsync(_cts.Token));
+        _ = Task.Run(() => UploadLoopAsync(_cts.Token), _cts.Token);
+        _ = Task.Run(() => InputLoopAsync(_cts.Token), _cts.Token);
         _log("hub relay started: frames go up to the hub, input comes back from it");
     }
 
@@ -147,7 +147,10 @@ public sealed class HubRelayClient : IRemoteMediaSink, IDisposable
                 _queuedControl = 0;
             }
             // Every queued item released the semaphore once; this batch consumed them all.
-            while (_pending.CurrentCount > 0 && _pending.Wait(0)) { }
+            while (_pending.CurrentCount > 0)
+            {
+                if (!await _pending.WaitAsync(0, ct)) break;
+            }
 
             var body = RelayFraming.Frame(batch);
             try
@@ -244,7 +247,8 @@ public sealed class HubRelayClient : IRemoteMediaSink, IDisposable
 
     private static async Task Delay(CancellationToken ct)
     {
-        try { await Task.Delay(RetryDelayMs, ct); } catch (OperationCanceledException) { }
+        try { await Task.Delay(RetryDelayMs, ct); }
+        catch (OperationCanceledException) { /* shutting down: the caller's loop sees ct and exits */ }
     }
 
     public void Dispose()

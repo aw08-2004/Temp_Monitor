@@ -36,6 +36,8 @@
     const MAX_DECODE_QUEUE = 8;
     const RETRY_MS = 1000;
 
+    function sleep(ms) { return new Promise((resolve) => setTimeout(resolve, ms)); }
+
     /** True if this browser can play a relayed session at all. */
     function supported() {
         return typeof window.VideoDecoder === 'function' &&
@@ -183,7 +185,7 @@
                     await sleep(RETRY_MS);
                     continue;
                 }
-                const next = parseInt(response.headers.get('X-Relay-Next') || '', 10);
+                const next = Number.parseInt(response.headers.get('X-Relay-Next') || '', 10);
                 const state = response.headers.get('X-Relay-State');
                 let buffer;
                 try { buffer = await response.arrayBuffer(); } catch (e) { continue; }
@@ -217,10 +219,9 @@
         // held down on somebody's PC.
         function send(message) {
             if (stopped) return;
-            const last = upQueue[upQueue.length - 1];
-            if (message.t === 'm' && last && last.t === 'm') upQueue[upQueue.length - 1] = message;
+            if (message.t === 'm' && upQueue.at(-1)?.t === 'm') upQueue[upQueue.length - 1] = message;
             else upQueue.push(message);
-            flush();
+            void flush();
         }
 
         async function flush() {
@@ -239,7 +240,7 @@
             } finally {
                 upBusy = false;
             }
-            flush();
+            void flush();
         }
 
         function stop() {
@@ -253,10 +254,14 @@
             upQueue.length = 0;
         }
 
-        function sleep(ms) { return new Promise((resolve) => setTimeout(resolve, ms)); }
-
         newDecoder();
-        downLoop();
+        // The loop handles its own network errors. Anything else that escapes it (a throw from
+        // the decoder or the status handler) would otherwise end it silently and leave the last
+        // frame on screen looking live -- so it ends the relay visibly instead.
+        downLoop().catch((e) => {
+            console.error('hub relay stopped:', e);
+            finish();
+        });
         return { send, stop };
     }
 

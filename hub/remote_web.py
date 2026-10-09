@@ -41,6 +41,9 @@ import sharing_web
 # at hub startup), never from the settings table -- secrets are structurally barred from there.
 TURN_SECRET_ENV = "REMOTE_TURN_SECRET"
 
+# The refusal for relay traffic on a session that has ended or expired.
+SESSION_NOT_ACTIVE = "session is not active"
+
 # Backwards-compatible alias so callers using the old private name keep working.
 _bearer_agent = auth_helpers.bearer_agent
 
@@ -244,16 +247,37 @@ def create_remote_blueprint(db_path, login_required, access, env_path=None):
         if sess is None:
             return jsonify({"error": "unknown session"}), 404
         if not _relay_session_live(sess):
-            return jsonify({"error": "session is not active"}), 409
-        if (request.content_length or 0) > remote_relay.MAX_UPLOAD_BYTES:
+            return jsonify({"error": SESSION_NOT_ACTIVE}), 409
+        body = _read_capped(remote_relay.MAX_UPLOAD_BYTES)
+        if body is None:
             return jsonify({"error": "upload too large"}), 413
         try:
-            records = remote_relay.parse_records(request.get_data(cache=False))
+            records = remote_relay.parse_records(body)
         except ValueError as e:
             return refusals.refuse(e)
         if remote_relay.push_down(session_id, records) is None:
             return jsonify({"error": "relay is not open for this session"}), 409
         return jsonify({"stored": len(records)}), 200
+
+    def _read_capped(limit):
+        """The request body, or None if it is longer than `limit` -- read without ever holding
+        more than `limit + 1` bytes.
+
+        The Content-Length check alone is not a bound: a chunked POST has no Content-Length,
+        and request.get_data() would buffer the whole body before parse_records ever saw it.
+        This is the one route that takes a raw binary body, and the hub sets no
+        MAX_CONTENT_LENGTH, so the cap has to be enforced here, on the stream (found in review
+        of #115)."""
+        if (request.content_length or 0) > limit:
+            return None
+        chunks, size = [], 0
+        while size <= limit:
+            chunk = request.stream.read(min(64 * 1024, limit + 1 - size))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            size += len(chunk)
+        return None if size > limit else b"".join(chunks)
 
     @bp.route("/api/agent/remote/<session_id>/relay/up", methods=["GET"])
     @agent_auth
@@ -416,7 +440,7 @@ def create_remote_blueprint(db_path, login_required, access, env_path=None):
             return (jsonify({"error": "Relaying through the hub is turned off in Settings."}),
                     403), False
         if not _relay_session_live(sess):
-            return (jsonify({"error": "session is not active"}), 409), False
+            return (jsonify({"error": SESSION_NOT_ACTIVE}), 409), False
         _, created = remote_relay.open_relay(session_id, sess["machine"])
         return None, created
 
@@ -460,7 +484,7 @@ def create_remote_blueprint(db_path, login_required, access, env_path=None):
         """Input and live-settings messages for the agent. JSON body, for the CSRF reason in
         this module's docstring."""
         if not _relay_session_live(sess):
-            return jsonify({"error": "session is not active"}), 409
+            return jsonify({"error": SESSION_NOT_ACTIVE}), 409
         data = request.get_json(silent=True) or {}
         messages = data.get("messages")
         if not isinstance(messages, list) or len(messages) > 200:

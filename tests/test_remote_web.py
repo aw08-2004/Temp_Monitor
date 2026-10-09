@@ -218,6 +218,32 @@ def main():
                    headers=octet)
         check("a malformed upload is refused -> 400", r.status_code == 400)
 
+        # The size cap, with and without a Content-Length. A chunked POST has none, and the
+        # first version checked only the header -- so a chunked body was buffered whole before
+        # anything looked at its size (found in review of #115). The cap is lowered for the
+        # test rather than sending 16 MB.
+        import io
+        saved_cap = remote_relay.MAX_UPLOAD_BYTES
+        remote_relay.MAX_UPLOAD_BYTES = len(frames) + 4
+        try:
+            big = frames * 2
+            r = c.post(f"/api/agent/remote/{sid}/relay/down", data=big, headers=octet)
+            check("an upload over the cap with a Content-Length -> 413", r.status_code == 413)
+
+            def chunked(body):
+                # No CONTENT_LENGTH, and wsgi.input_terminated set the way waitress sets it for
+                # a chunked request -- which is what makes Werkzeug read the stream at all.
+                return c.post(f"/api/agent/remote/{sid}/relay/down", headers=auth,
+                              input_stream=io.BytesIO(body),
+                              content_type="application/octet-stream",
+                              environ_overrides={"wsgi.input_terminated": True})
+            r = chunked(big)
+            check("the same upload chunked, with no Content-Length -> 413", r.status_code == 413)
+            r = chunked(frames)
+            check("a chunked upload under the cap is still taken -> 200", r.status_code == 200)
+        finally:
+            remote_relay.MAX_UPLOAD_BYTES = saved_cap
+
         r = c.get(f"/api/remote/session/{sid}/relay/down?after=0")
         check("the console reads the frames back -> 200 binary",
               r.status_code == 200 and r.mimetype == "application/octet-stream")
