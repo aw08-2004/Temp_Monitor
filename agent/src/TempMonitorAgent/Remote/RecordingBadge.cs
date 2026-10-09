@@ -276,7 +276,18 @@ public sealed class RecordingBadge : IDisposable
             catch (InvalidOperationException) { /* already closing */ }
         }
 
+        /// <summary>The badge thread: attach, become an STA, then show the window until it is
+        /// closed. Each step fails closed through <see cref="Fail"/>, and the order of the first
+        /// two is the whole fix for win32 170 -- see <see cref="AttachToDesktop"/>.</summary>
         private void Run()
+        {
+            if (!AttachToDesktop() || !BecomeSingleThreaded()) return;
+            ShowUntilClosed();
+        }
+
+        /// <summary>Put this thread on the badge's desktop. False, with the reason recorded,
+        /// when it cannot.</summary>
+        private bool AttachToDesktop()
         {
             // Attach BEFORE this thread owns a window of any kind -- while it owns one,
             // SetThreadDesktop fails with ERROR_BUSY. That includes a window no code here
@@ -290,7 +301,7 @@ public sealed class RecordingBadge : IDisposable
             // that is how it hid. Not being the first STA is no way out: a later STA has no
             // window at birth, but gets its own at its first pumping wait, so it attaches only
             // until it has waited on anything. Hence the order: born MTA (no window), attach,
-            // and only then become the STA that WinForms expects (below).
+            // and only then become the STA that WinForms expects (BecomeSingleThreaded).
             //
             // The handle is deliberately never closed: after the message loop ends the thread
             // still has a queue, so it cannot be detached first, and closing a desktop a thread
@@ -301,41 +312,49 @@ public sealed class RecordingBadge : IDisposable
             // a window needs and is not granted to every caller; DESKTOP_CREATEWINDOW is the one
             // right a badge cannot do without.
             IntPtr desktop = OpenDesktop();
-            if (desktop == IntPtr.Zero)
+            if (desktop == IntPtr.Zero) return StayOnCurrentDesktop(Marshal.GetLastWin32Error());
+
+            // Named before the attach, so a failure can say which desktop it was: the
+            // user's own (Default) and the lock screen (Winlogon) are different problems.
+            Desktop = Desktops.NameOf(desktop) ?? (InputDesktopName.Length == 0 ? null : InputDesktopName);
+            if (!Desktops.SetThreadDesktop(desktop))
             {
                 int err = Marshal.GetLastWin32Error();
-                // Already on the input desktop (an unprivileged process on its own Default
-                // desktop): nothing to attach to, and the window can go up right here.
-                // An empty name is a watcher that cannot read the input desktop at all, which
-                // happens only outside SYSTEM; then the user's own Default desktop is the one
-                // place an unprivileged process can be showing anything.
-                // This branch never calls SetThreadDesktop, so a self-test that takes it says
-                // nothing about the attach every recording as SYSTEM depends on.
-                string? here = Desktops.CurrentThreadDesktopName();
-                string expected = InputDesktopName.Length == 0 ? "Default" : InputDesktopName;
-                if (here is null || !string.Equals(here, expected, StringComparison.Ordinal))
-                {
-                    Desktop = InputDesktopName.Length == 0 ? null : InputDesktopName;
-                    Fail($"could not open the input desktop (win32 {err})");
-                    return;
-                }
-                Desktop = here;
+                Desktops.CloseDesktop(desktop);
+                Fail($"could not attach to the input desktop (win32 {err})");
+                return false;
             }
-            else
-            {
-                // Named before the attach, so a failure can say which desktop it was: the
-                // user's own (Default) and the lock screen (Winlogon) are different problems.
-                Desktop = Desktops.NameOf(desktop) ?? (InputDesktopName.Length == 0 ? null : InputDesktopName);
-                if (!Desktops.SetThreadDesktop(desktop))
-                {
-                    int err = Marshal.GetLastWin32Error();
-                    Desktops.CloseDesktop(desktop);
-                    Fail($"could not attach to the input desktop (win32 {err})");
-                    return;
-                }
-                Attached = true;
-            }
+            Attached = true;
+            return true;
+        }
 
+        /// <summary>The input desktop could not be opened (<paramref name="openError"/>): go up
+        /// where this thread already is, if that is the desktop being asked for.</summary>
+        private bool StayOnCurrentDesktop(int openError)
+        {
+            // Already on the input desktop (an unprivileged process on its own Default
+            // desktop): nothing to attach to, and the window can go up right here.
+            // An empty name is a watcher that cannot read the input desktop at all, which
+            // happens only outside SYSTEM; then the user's own Default desktop is the one
+            // place an unprivileged process can be showing anything.
+            // This branch never calls SetThreadDesktop, so a self-test that takes it says
+            // nothing about the attach every recording as SYSTEM depends on.
+            string? here = Desktops.CurrentThreadDesktopName();
+            string expected = InputDesktopName.Length == 0 ? "Default" : InputDesktopName;
+            if (here is null || !string.Equals(here, expected, StringComparison.Ordinal))
+            {
+                Desktop = InputDesktopName.Length == 0 ? null : InputDesktopName;
+                Fail($"could not open the input desktop (win32 {openError})");
+                return false;
+            }
+            Desktop = here;
+            return true;
+        }
+
+        /// <summary>Turn this thread, now attached, into the STA WinForms expects. False, with
+        /// the reason recorded, when the runtime refuses.</summary>
+        private bool BecomeSingleThreaded()
+        {
             // Now the STA. Unknown first: the runtime made this thread an explicit MTA when it
             // started and will not put STA on top of that (TrySetApartmentState(STA) returns
             // false; CoInitializeEx says RPC_E_CHANGED_MODE). Unknown makes the runtime
@@ -352,37 +371,24 @@ public sealed class RecordingBadge : IDisposable
             // never the process's first one -- it works only by the accident of which STA COM
             // treats as main, and one exit brings the bug back.
             Thread self = Thread.CurrentThread;
-            if (!self.TrySetApartmentState(ApartmentState.Unknown) ||
-                !self.TrySetApartmentState(ApartmentState.STA))
-            {
-                // Fail closed, like every other badge failure: the hub ends the recording.
-                Fail("could not make the badge thread single-threaded after attaching " +
-                     $"(apartment {self.GetApartmentState()})");
-                return;
-            }
+            if (self.TrySetApartmentState(ApartmentState.Unknown) &&
+                self.TrySetApartmentState(ApartmentState.STA))
+                return true;
+            // Fail closed, like every other badge failure: the hub ends the recording.
+            Fail("could not make the badge thread single-threaded after attaching " +
+                 $"(apartment {self.GetApartmentState()})");
+            return false;
+        }
 
+        /// <summary>Create the badge's form and run its message loop until it closes -- unless a
+        /// <see cref="Close"/> already arrived, in which case it is never shown.</summary>
+        private void ShowUntilClosed()
+        {
             try
             {
                 ConsentBanner.InitialiseUi();
                 var form = new BadgeForm();
-                form.Shown += (_, _) =>
-                {
-                    // The second half of Close()'s contract: a close that arrived after the form
-                    // was published but before its window existed is honoured here.
-                    bool late;
-                    lock (_gate)
-                    {
-                        late = _closeRequested;
-                        if (!late) _alive = true;
-                    }
-                    if (late)
-                    {
-                        form.Close();
-                        return;
-                    }
-                    WindowHandle = form.Handle;
-                    _ready.Set();
-                };
+                form.Shown += (_, _) => OnShown(form);
                 form.FormClosed += (_, _) => _alive = false;
                 lock (_gate)
                 {
@@ -406,6 +412,25 @@ public sealed class RecordingBadge : IDisposable
             {
                 _alive = false;
             }
+        }
+
+        private void OnShown(BadgeForm form)
+        {
+            // The second half of Close()'s contract: a close that arrived after the form
+            // was published but before its window existed is honoured here.
+            bool late;
+            lock (_gate)
+            {
+                late = _closeRequested;
+                if (!late) _alive = true;
+            }
+            if (late)
+            {
+                form.Close();
+                return;
+            }
+            WindowHandle = form.Handle;
+            _ready.Set();
         }
 
         private void Fail(string error)
