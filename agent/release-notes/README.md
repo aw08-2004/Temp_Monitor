@@ -9,6 +9,23 @@ notice, what it costs them, and what to do when it misbehaves. An agent update r
 machine within about fifteen minutes of the release being signed, so anything in here that
 needs a decision needs to be readable before it has already happened everywhere.
 
+## Format
+
+From 3.43.0 on, notes use the Conventional Changelog layout that release-please produces
+(the owner's choice, 2026-10-09). Files up to 3.42.0 are long-form prose and are left as
+they were published.
+
+- A heading `## X.Y.Z (YYYY-MM-DD)`, the date the release is cut.
+- Only the sections that have entries, in this order: `### ⚠ BREAKING CHANGES`,
+  `### Features`, `### Bug Fixes`, `### Performance Improvements`, `### Code Refactoring`,
+  `### Documentation`, `### Tests`.
+- One bullet per change: `* **scope:** what an operator will notice (#PR) (commit)`, with the
+  scope an area of the product (`remote`, `backups`, `patches`, ...).
+- Anything that constrains the rollout -- a hub version that must be deployed first, a
+  setting that must be changed by hand -- goes under BREAKING CHANGES as a full sentence
+  saying what to do. The point above still holds: a decision has to be readable before the
+  fleet has already updated.
+
 ## Publishing one
 
 Pass the path, never the text:
