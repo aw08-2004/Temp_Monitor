@@ -1559,6 +1559,10 @@ agent long-polls. `remote_relay.py` (in memory) + routes in `remote_web.py`;
   switch is audited (`remote_session_relay`, once per session), frames live in memory only,
   `remote.relay_fallback` turns it off, and a machine borrowed from another hub is never
   relayed (`peer_signal` refuses it; its viewer has no relay routes).
+  **On by default, deliberately** (owner's request, raised again in review of #115): the
+  owner asked for the fallback, and the alternative to it is a session that does not work at
+  all. A deployment that cannot accept the hub seeing the screen switches it off once; one
+  that never thought about it gets a working session and an audit row saying it happened.
 - *Rejected:* one streaming response instead of long-polls (a TLS terminator may buffer it, and
   a buffered stream is a frozen screen with no error anywhere); Socket.IO (polling-only here, so
   the same long-polls plus base64); MJPEG or re-encoding on the hub (the agent's H.264 is
