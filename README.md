@@ -289,6 +289,11 @@ there. Don't set `HUB_STATE_DIR`, `HUB_LOG_DIR` or `HUB_RECORDINGS_DIR`; the ima
   `network_mode: host` in the compose file restores the hub's own magic packet.
 - **TURN** is unchanged: `turn/docker-compose.yml` on Linux, or the installer's WSL relay on
   Windows.
+- **Dependencies are locked for the image.** `hub/requirements.txt` stays unpinned for the
+  Windows service. The image installs `hub/requirements.lock` instead: exact versions, every
+  wheel hash-checked, wheels only. After changing `requirements.txt`, run
+  `python tools/lock_hub_requirements.py` (it needs Docker) and commit the new lock. A stale
+  lock fails the image build and names the missing package.
 
 **Moving an existing Windows hub into Docker:**
 

@@ -158,6 +158,45 @@ def test_dockerfile_sets_mode():
     check("Dockerfile serves with 128 waitress threads", "--threads=128" in text)
 
 
+# Never in the image: the build files themselves, and what a working tree grows on its own.
+_NOT_SHIPPED = {"Dockerfile", ".dockerignore", "__pycache__"}
+
+
+def _copy_sources(dockerfile_text):
+    """Every source path named by a COPY instruction, continuation lines joined."""
+    import shlex
+    joined = dockerfile_text.replace("\\\r\n", " ").replace("\\\n", " ")
+    sources = []
+    for line in joined.splitlines():
+        # Only COPY lines are split: comments elsewhere carry apostrophes shlex would choke on.
+        if not line.strip().upper().startswith("COPY "):
+            continue
+        parts = shlex.split(line.strip())
+        args = [p for p in parts[1:] if not p.startswith("--")]
+        sources.extend(args[:-1])  # the last argument is the destination
+    return sources
+
+
+def test_dockerfile_copies_every_hub_entry():
+    # The Dockerfile names what it copies instead of `COPY .`, which is the kind of list that
+    # once missed a new module and left the hub crash-looping (wsgi.py's self-heal exists for
+    # that). In an image nothing heals it: the hub would boot without the file. So every
+    # top-level entry of hub/ must be matched by some COPY source, or be named in _NOT_SHIPPED.
+    import fnmatch
+    print("\n-- hub/Dockerfile copies everything hub/ ships --")
+    hub = os.path.join(_REPO, "hub")
+    with open(os.path.join(hub, "Dockerfile"), encoding="utf-8") as fh:
+        sources = _copy_sources(fh.read())
+    check("the Dockerfile has COPY sources at all", bool(sources))
+    check("...and none of them is the whole context", "." not in sources and "./" not in sources)
+    missing = [name for name in sorted(os.listdir(hub))
+               if name not in _NOT_SHIPPED and not name.endswith(".pyc")
+               and not any(fnmatch.fnmatch(name, src.rstrip("/")) for src in sources)]
+    check(f"every top-level hub/ entry is copied (missing: {', '.join(missing) or 'none'})",
+          not missing)
+    check("the dependency lock is copied", "requirements.lock" in sources)
+
+
 def main():
     test_mode_parsed()
     test_auto_update_forced_off()
@@ -166,6 +205,7 @@ def main():
     test_routes()
     test_wsgi_self_heal_skipped()
     test_dockerfile_sets_mode()
+    test_dockerfile_copies_every_hub_entry()
     print(f"\n==== {PASS} passed, {FAIL} failed ====")
     return 1 if FAIL else 0
 
