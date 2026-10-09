@@ -56,4 +56,20 @@ public sealed class LiveStreamSettings
         Volatile.Write(ref _current, updated);
         return updated;
     }
+
+    private int _keyframeRequested;
+
+    /// <summary>Ask the capture loop for a fresh keyframe as soon as possible.
+    ///
+    /// WebRTC never needed this: the encoder's two-second IDR interval covers a viewer whose
+    /// media starts mid-GOP. The hub relay does -- switching onto it, a viewer resynchronised
+    /// after falling behind, and a browser decoder that errored all leave a viewer that can show
+    /// nothing until the next keyframe, and two seconds of black is exactly what an operator
+    /// who just watched WebRTC fail reads as "the fallback is broken too". The capture loop
+    /// honours it with a rebuild, the one path that is guaranteed to re-key (see
+    /// <see cref="CaptureEncodePipeline"/>).</summary>
+    public void RequestKeyframe() => Volatile.Write(ref _keyframeRequested, 1);
+
+    /// <summary>True once per <see cref="RequestKeyframe"/> -- the capture loop's half.</summary>
+    public bool TakeKeyframeRequest() => Interlocked.Exchange(ref _keyframeRequested, 0) == 1;
 }

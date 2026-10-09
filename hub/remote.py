@@ -38,6 +38,7 @@ import uuid
 
 import envfile
 import fleet
+import remote_relay
 
 # ================================
 # SESSION LIFECYCLE
@@ -64,7 +65,10 @@ SENDER_CONSOLE = "console"
 _SENDERS = frozenset({SENDER_AGENT, SENDER_CONSOLE})
 
 # What a signal carries. offer/answer are SDP; ice is a trickled candidate; bye tears down.
-SIGNAL_KINDS = frozenset({"offer", "answer", "ice", "bye"})
+# relay is the console asking the agent to give up on WebRTC and carry the session through the
+# hub instead (remote_relay.py) -- a signal rather than a new route because the agent already
+# polls this channel, and an agent too old to know the kind simply ignores it.
+SIGNAL_KINDS = frozenset({"offer", "answer", "ice", "bye", "relay"})
 
 
 def get_conn(db_path):
@@ -363,6 +367,9 @@ def end_session(db_path, session_id, reason, actor="hub"):
                 "SELECT machine FROM remote_sessions WHERE id = ?", (str(session_id),)
             ).fetchone()
     if ended:
+        # A relayed session holds a few seconds of video and a waiting long-poll on each side;
+        # closing it here wakes both at once instead of leaving them to time out.
+        remote_relay.close_relay(session_id)
         fleet.audit(db_path, actor=actor, action="remote_session_end",
                     level=fleet.LEVEL_SECURITY,
                     target=row["machine"] if row else str(session_id),
@@ -378,13 +385,20 @@ def expire_sessions(db_path, now=None):
     if now is None:
         now = int(time.time())
     with get_conn(db_path) as conn:
+        ids = [r["id"] for r in conn.execute(
+            "SELECT id FROM remote_sessions WHERE status IN (?, ?, ?) AND expires_at <= ?",
+            (STATUS_PENDING, STATUS_CONNECTING, STATUS_ACTIVE, int(now)),
+        ).fetchall()]
         cur = conn.execute(
             "UPDATE remote_sessions SET status = ?, ended_at = ?, ended_reason = ? "
             "WHERE status IN (?, ?, ?) AND expires_at <= ?",
             (STATUS_EXPIRED, int(now), "ttl expired",
              STATUS_PENDING, STATUS_CONNECTING, STATUS_ACTIVE, int(now)),
         )
-        return cur.rowcount or 0
+        retired = cur.rowcount or 0
+    for session_id in ids:
+        remote_relay.close_relay(session_id)
+    return retired
 
 
 # ================================

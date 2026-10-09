@@ -19,7 +19,7 @@ namespace TempMonitorAgent.Remote;
 /// but without it, "the screen went black" is unguessable from the operator's side, and the
 /// answer is usually something the agent already knows.
 /// </summary>
-public sealed class RemotePeer : IDisposable
+public sealed class RemotePeer : IRemoteMediaSink, IDisposable
 {
     private readonly RTCPeerConnection _pc;
     private readonly Action<string> _log;
@@ -199,12 +199,18 @@ public sealed class RemotePeer : IDisposable
     }
 
     /// <summary>Create the offer, set it as the local description, and return it as a
-    /// signaling payload ({type, sdp}) to POST to the console.</summary>
-    public async Task<object> CreateOfferAsync()
+    /// signaling payload ({type, sdp, relay}) to POST to the console.
+    ///
+    /// <c>relay</c> tells the console this agent can fall back to the hub relay
+    /// (<see cref="HubRelayClient"/>) if the offer never connects. It rides in the offer because
+    /// that is the first thing the console reads from this helper, and a viewer that has not
+    /// seen it -- an agent older than the relay -- must keep the old behaviour and report the
+    /// failure rather than ask for a fallback nothing will answer.</summary>
+    public async Task<object> CreateOfferAsync(bool relayCapable)
     {
         var offer = _pc.createOffer(null);
         await _pc.setLocalDescription(offer);
-        return new { type = "offer", sdp = offer.sdp };
+        return new { type = "offer", sdp = offer.sdp, relay = relayCapable };
     }
 
     /// <summary>Apply the console's answer SDP. Any ICE candidates that arrived before the

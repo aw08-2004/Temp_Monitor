@@ -40,6 +40,17 @@ public static class RemoteHelper
     /// operator does not watch a frozen frame through a lock transition, cheap enough to ignore.</summary>
     private const int DesktopPollMs = 250;
 
+    /// <summary>How long a session outlives a failed or dropped WebRTC peer, waiting for the
+    /// console to switch it to the hub relay.
+    ///
+    /// Before the relay existed a lost peer ended the session at once, and that was right: there
+    /// was nothing left to carry it. Now the console may still ask (it gives WebRTC about twenty
+    /// seconds from the offer, see remote.js), so ending here would race it. A console too old
+    /// to ask never will, and its session then ends exactly as before, this much later -- which
+    /// also means a peer that drops through <c>disconnected</c> and recovers on its own is no
+    /// longer killed for it.</summary>
+    private const int RelayGraceMs = 45_000;
+
     /// <summary>If this process was launched as the remote helper, return the session-file
     /// path that followed <see cref="AgentConfig.RemoteHelperArg"/> (empty string if the flag
     /// was passed with no value). Returns null for a normal service launch, so Program.cs can
@@ -275,14 +286,30 @@ public static class RemoteHelper
 
         using var peer = new RemotePeer(iceServers, msg => Log.Information("{Msg}", msg),
                                         session.ParsedCodec);
+        // What the capture thread feeds: the peer until the console asks for the hub relay,
+        // then the relay. See MediaRouter for why the swap is safe mid-frame.
+        var router = new MediaRouter(peer);
+        HubRelayClient? relay = null;
+        // When the peer was lost (Environment.TickCount64), or 0 while it is healthy. Read by
+        // the poll loop below, which ends the session once RelayGraceMs passes with no relay.
+        long peerLostAt = 0;
 
         peer.OnConnectionStateChange += state =>
         {
+            // Once relayed, the peer is closed on purpose and its states mean nothing.
+            if (Volatile.Read(ref relay) is not null) return;
+            if (state == RTCPeerConnectionState.connected)
+            {
+                Interlocked.Exchange(ref peerLostAt, 0);
+                return;
+            }
             if (state is RTCPeerConnectionState.failed or RTCPeerConnectionState.closed
                       or RTCPeerConnectionState.disconnected)
             {
-                Log.Information("Peer {State}; ending session.", state);
-                cts.Cancel();
+                if (Interlocked.CompareExchange(ref peerLostAt, Environment.TickCount64, 0) == 0)
+                    Log.Information("Peer {State}; waiting up to {Grace}s for the console to " +
+                                    "switch to the hub relay before ending the session.",
+                                    state, RelayGraceMs / 1000);
             }
         };
         peer.OnLocalIceCandidate += payload =>
@@ -312,7 +339,7 @@ public static class RemoteHelper
         await peer.EnableControlChannelAsync();
 
         // Offer first, then start streaming, then poll for the answer + remote ICE.
-        var offer = await peer.CreateOfferAsync();
+        var offer = await peer.CreateOfferAsync(relayCapable: true);
         int offerSeq = await signaling.PostSignalAsync("offer", offer, cts.Token);
         Log.Information("Posted offer (seq {Seq}); starting capture and awaiting the console's answer.",
                         offerSeq);
@@ -325,13 +352,17 @@ public static class RemoteHelper
         var captureThread = StartThread("remote-capture", () =>
         {
             using var binder = new ThreadDesktopBinder("capture", m => Log.Information("{Msg}", m));
-            CaptureEncodePipeline.RunToPeer(
-                peer, settings, cts.Token, m => Log.Information("{Msg}", m),
+            CaptureEncodePipeline.RunToSink(
+                router, settings, cts.Token, m => Log.Information("{Msg}", m),
                 desktops, binder,
                 onGeometry: g =>
                 {
                     pendingGeometry.Set(g);
-                    peer.SendControl(JsonSerializer.Serialize(new
+                    // Through the router, not the peer: on the relay this is how the viewer
+                    // learns the capture size at all (remote_relay keeps the newest one for a
+                    // viewer that joins late), and the serializer's field order -- "t" first --
+                    // is what the hub's byte test for it relies on.
+                    router.SendControl(JsonSerializer.Serialize(new
                     {
                         t = "geom",
                         w = g.Width,
@@ -346,7 +377,7 @@ public static class RemoteHelper
                 {
                     Log.Warning("Capture has produced nothing for several seconds on desktop {Desktop}",
                                 string.IsNullOrEmpty(desktop) ? "?" : desktop);
-                    peer.SendControl(JsonSerializer.Serialize(new
+                    router.SendControl(JsonSerializer.Serialize(new
                     {
                         t = "capture",
                         state = "stalled",
@@ -357,6 +388,28 @@ public static class RemoteHelper
 
         var inputThread = StartThread("remote-input",
             () => RunInputLoop(inputQueue, settings, pendingGeometry, desktops, cts.Token), cts);
+
+        // The console gave up on WebRTC and asked for the hub relay (remote_relay.py). Move the
+        // stream across: the relay becomes the sink, input starts arriving from the hub into the
+        // same queue the control channel fed, and the peer is closed -- relay is assigned before
+        // that, so its 'closed' transition is ignored rather than starting the grace clock.
+        HubRelayClient StartRelay()
+        {
+            Log.Information("Console asked for the hub relay; moving the session off WebRTC.");
+            var client = new HubRelayClient(
+                session.SessionId, bearer, session.ParsedCodec, settings,
+                m => Log.Information("{Msg}", m), inputQueue.Enqueue);
+            client.Ended += reason =>
+            {
+                Log.Information("Hub relay ended ({Reason}); ending session.", reason);
+                cts.Cancel();
+            };
+            Volatile.Write(ref relay, client);
+            router.Use(client);
+            client.Start();
+            peer.Close();
+            return client;
+        }
 
         // Start reading AFTER our own offer, not from the beginning. The hub keeps every signal
         // for the life of the session, and this helper may be a replacement for one the
@@ -374,16 +427,32 @@ public static class RemoteHelper
             catch (Exception e) { Log.Warning("signaling poll failed: {Msg}", e.Message); await Delay(cts.Token); continue; }
 
             afterSeq = poll.NextSeq;
-            foreach (var sig in poll.Signals) HandleSignal(peer, sig, cts);
+            foreach (var sig in poll.Signals)
+            {
+                if (sig.Kind == "relay")
+                {
+                    if (relay is null) relay = StartRelay();
+                    continue;
+                }
+                HandleSignal(peer, sig, cts);
+            }
             if (poll.Status is "ended" or "expired")
             {
                 Log.Information("Session {Status} by the hub; tearing down.", poll.Status);
+                break;
+            }
+            long lostAt = Interlocked.Read(ref peerLostAt);
+            if (relay is null && lostAt != 0 && Environment.TickCount64 - lostAt > RelayGraceMs)
+            {
+                Log.Information("Peer lost and the console did not switch to the hub relay; " +
+                                "ending session.");
                 break;
             }
             await Delay(cts.Token);
         }
 
         cts.Cancel();
+        relay?.Dispose();
         inputQueue.Complete();
         // Authoritatively end the hub session so it doesn't linger until the TTL sweep; the
         // browser sees status "ended" on its next poll and tears down.
@@ -434,7 +503,9 @@ public static class RemoteHelper
     }
 
     /// <summary>Handle a <c>{"t":"cfg", ...}</c> message from the viewer -- a live quality
-    /// change. Returns true if the message was config (and therefore not input).
+    /// change -- or a <c>{"t":"key"}</c> request for a fresh keyframe, which only the hub relay's
+    /// viewer sends (its decoder errored, or it fell behind and dropped frames). Returns true if
+    /// the message was one of those (and therefore not input).
     ///
     /// Only fps, bitrate, scale and monitor are live. Codec and encoder choice are fixed at
     /// session start because they are negotiated in the SDP / decide which encoder object
@@ -445,7 +516,13 @@ public static class RemoteHelper
         try { e = JsonDocument.Parse(json).RootElement; }
         catch { return false; }
         if (e.ValueKind != JsonValueKind.Object) return false;
-        if (!e.TryGetProperty("t", out var t) || t.GetString() != "cfg") return false;
+        if (!e.TryGetProperty("t", out var t)) return false;
+        if (t.GetString() == "key")
+        {
+            settings.RequestKeyframe();
+            return true;
+        }
+        if (t.GetString() != "cfg") return false;
 
         var applied = settings.Update(current => current with
         {

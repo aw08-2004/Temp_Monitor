@@ -982,6 +982,10 @@
         "help": "URL de retransmisión TURN, probadas en orden. Necesarias para extremos tras NAT que bloquean las conexiones directas. Una retransmisión tras NAT necesita tres: turn:HOST-PUBLICO:3478 para extremos en internet, turn:IP-LAN:3478 para un extremo dentro de la propia red de la retransmisión y turn:IP-LAN:3479 para dos extremos ambos dentro de ella; consulta turn/README.md. Las credenciales se acuñan por sesión a partir de REMOTE_TURN_SECRET en .env; TURN se omite si ese secreto no está definido.",
         "placeholder": "turn:relay.example.com:3478"
       },
+      "remote.relay_fallback": {
+        "label": "Recurrir a la retransmisión a través del hub",
+        "help": "Cuando WebRTC no consigue conectar en absoluto (el servidor TURN está caído o inaccesible, o un cortafuegos descarta el tráfico), la sesión pasa por HTTPS a través del hub. Cuesta ancho de banda del hub (cada fotograma pasa dos veces) y algo más de retardo, y el hub ve la imagen en lugar de medios cifrados, por lo que cada cambio queda registrado en el registro de auditoría. Desactivado significa que una sesión que no puede conectar directamente simplemente falla."
+      },
       "directory.enabled": {
         "label": "Sincronizar con Active Directory",
         "help": "Cuando está activado, el hub se conecta al controlador de dominio de abajo y hace corresponder los equipos con objetos de tipo equipo de AD. Sin activar, no se ejecuta nada de esto."
@@ -2309,6 +2313,10 @@
       "connection_failed": "La conexión falló.",
       "ice_summary": "Este navegador reunió: {local}. La máquina reunió: {remote}.",
       "ice_no_relay": "Ninguna de las partes produjo un candidato 'relay', así que el servidor TURN no era accesible desde ninguna de las dos máquinas — revise Ajustes → Control remoto, el firewall del relay y su rango de puertos redirigido.",
+      "live_relay": "En directo (vía hub)",
+      "relay_switching": "No se pudo establecer una conexión directa, así que la sesión pasa a la retransmisión del hub…",
+      "relay_unsupported": "La retransmisión del hub no está disponible porque este navegador no puede decodificar vídeo por sí mismo (sin WebCodecs).",
+      "relay_failed": "No se pudo pasar a la retransmisión del hub: {error}",
       "logon_screen_desktop": "Pantalla de bloqueo o de inicio de sesión",
       "geom": "{width}×{height} · {encoder} · escritorio {desktop}",
       "desktop_unknown": "?",

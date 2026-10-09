@@ -982,6 +982,10 @@
         "help": "TURN-Relay-URLs, in dieser Reihenfolge versucht. Erforderlich für Gegenstellen hinter NAT, die Direktverbindungen blockieren. Ein Relay hinter NAT braucht drei: turn:PUBLIC-HOST:3478 für Gegenstellen im Internet, turn:LAN-IP:3478 für eine Gegenstelle im Netz des Relays selbst und turn:LAN-IP:3479 für zwei Gegenstellen, die beide darin liegen – siehe turn/README.md. Zugangsdaten werden je Sitzung aus REMOTE_TURN_SECRET in .env erzeugt; ohne dieses Geheimnis wird TURN übersprungen.",
         "placeholder": "turn:relay.example.com:3478"
       },
+      "remote.relay_fallback": {
+        "label": "Ersatzweise über den Hub weiterleiten",
+        "help": "Wenn WebRTC überhaupt keine Verbindung aufbauen kann – der TURN-Server ist ausgefallen oder nicht erreichbar, oder eine Firewall verwirft den Verkehr –, läuft die Sitzung stattdessen per HTTPS über den Hub. Das kostet Hub-Bandbreite (jedes Bild läuft zweimal hindurch) und etwas zusätzliche Verzögerung, und der Hub sieht das Bild statt verschlüsselter Medien; deshalb wird jeder Wechsel im Audit-Log festgehalten. Aus bedeutet, dass eine Sitzung ohne direkte Verbindung einfach fehlschlägt."
+      },
       "directory.enabled": {
         "label": "Mit Active Directory synchronisieren",
         "help": "Wenn aktiviert, verbindet sich der Hub mit dem unten angegebenen Domänencontroller und ordnet Computer den Computerobjekten in AD zu. Ohne Aktivierung läuft davon nichts."
@@ -2309,6 +2313,10 @@
       "connection_failed": "Verbindung fehlgeschlagen.",
       "ice_summary": "Dieser Browser hat gesammelt: {local}. Der Rechner hat gesammelt: {remote}.",
       "ice_no_relay": "Keine Seite hat einen 'relay'-Kandidaten erzeugt, der TURN-Server war also von keinem der beiden Rechner erreichbar — prüfen Sie Einstellungen → Fernsteuerung, die Firewall des Relays und den weitergeleiteten Portbereich.",
+      "live_relay": "Live (über den Hub)",
+      "relay_switching": "Es kam keine direkte Verbindung zustande, die Sitzung wechselt daher zum Hub-Relay…",
+      "relay_unsupported": "Das Hub-Relay ist nicht verfügbar, weil dieser Browser Video nicht selbst dekodieren kann (kein WebCodecs).",
+      "relay_failed": "Wechsel zum Hub-Relay nicht möglich: {error}",
       "logon_screen_desktop": "Sperr- oder Anmeldebildschirm",
       "geom": "{width}×{height} · {encoder} · Desktop {desktop}",
       "desktop_unknown": "?",

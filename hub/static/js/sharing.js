@@ -480,6 +480,10 @@
                     inventory: null,
                     inventoryRefresh: null,
                     virtualDisplay: null,
+                    // No hub relay for a borrowed machine (remote_web.peer_signal refuses it).
+                    // This page does not load remote-relay.js either; the nulls say so here.
+                    relayDown: null,
+                    relayUp: null,
                 },
             });
         openViewer.setTitle(machine.hostname);

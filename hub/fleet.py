@@ -645,6 +645,10 @@ ACTION_LEVELS = {
     "machine.update_channel": LEVEL_SECURITY,
     "remote_session_start": LEVEL_SECURITY,
     "remote_session_end": LEVEL_SECURITY,
+    # A session switched onto the hub relay (remote_relay.py): from that point the hub carries
+    # the picture in the clear rather than as SRTP it cannot read, so the switch is recorded
+    # beside the start and end of the session it happened to.
+    "remote_session_relay": LEVEL_SECURITY,
     "remote_turn_secret_set": LEVEL_SECURITY,
     # Installing the virtual display puts a third-party driver into the DriverStore and its
     # publisher into this machine's certificate store. That is an expansion of what the

@@ -477,6 +477,11 @@ REGISTRY = (
        unit="seconds"),
     _s("remote.stun_urls", "remote", "url_list", []),
     _s("remote.turn_urls", "remote", "url_list", []),
+    # When WebRTC cannot connect at all (no relay candidate, coturn down, a firewall eating
+    # UDP), carry the session through the hub over HTTPS instead -- remote_relay.py. On by
+    # default because the alternative is a session that does not work; a switch because it
+    # costs hub bandwidth and lets the hub see the picture, which a deployment may not accept.
+    _s("remote.relay_fallback", "remote", "bool", True),
 
     # ---------------- Active Directory (roadmap #4) ----------------
     # Entirely opt-in: with `enabled` off nothing runs, ldap3 is never imported, and the

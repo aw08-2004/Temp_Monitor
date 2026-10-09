@@ -28,6 +28,14 @@
 //     those controls while connected rather than letting a change silently do nothing.
 //   * LIVE (monitor, fps, bitrate, scale) rides the control channel as a {t:'cfg'} message and
 //     the agent rebuilds its capture pipeline in place.
+//
+// WHEN WEBRTC CANNOT CONNECT AT ALL, the session falls back to the hub relay (remote-relay.js,
+// hub/remote_relay.py): the agent's frames come down a long-poll and are decoded here, input
+// goes up as JSON. It is a fallback rather than a choice because it costs hub bandwidth and
+// latency and lets the hub see the picture, so it is only tried once WebRTC has actually
+// failed -- or has spent RELAY_AFTER_MS without connecting, since ICE can sit in "checking"
+// far longer than anyone will watch a black rectangle. Both ends must agree: the agent says it
+// can relay in its offer, and a page without remote-relay.js (Sharing) never asks.
 (function () {
     'use strict';
 
@@ -40,6 +48,10 @@
     const POLL_INTERVAL_MS = 800;
     const POLL_CONNECTED_MS = 3000;
     const MOVE_THROTTLE_MS = 40;   // ~25 mouse-move messages/sec is plenty and won't flood
+    // How long WebRTC gets, from the agent's offer, before the viewer gives up on it and asks
+    // for the hub relay. SIPSorcery's own ICE timeout is about sixteen seconds; this is a
+    // little longer so that a slow-but-working relay candidate still wins.
+    const RELAY_AFTER_MS = 20000;
 
     // Presets exist because "15fps / 4000kbps / 100%" means nothing to someone who just wants
     // the screen to stop stuttering. Custom reveals the raw numbers for when it does matter.
@@ -92,6 +104,9 @@
             inventoryRefresh: () =>
                 `/api/remote/${encodeURIComponent(machine)}/inventory/refresh`,
             virtualDisplay: () => `/api/remote/${encodeURIComponent(machine)}/virtual-display`,
+            relayDown: (id, after) =>
+                `/api/remote/session/${encodeURIComponent(id)}/relay/down?after=${after}`,
+            relayUp: (id) => `/api/remote/session/${encodeURIComponent(id)}/relay/up`,
         }, options.routes || {});
 
         const els = {
@@ -143,6 +158,13 @@
         // piece of it that is not in any log: "neither side produced a relay candidate" means the
         // TURN server was unreachable from both, which is a deployment answer, not a bug report.
         let iceTypes = { local: new Set(), remote: new Set() };
+        // The hub relay, once this session has fallen back to it (see the file header).
+        // `relayCapable` comes from the agent's offer; an agent too old to relay never says so.
+        let relay = null;
+        let relaySwitching = false;
+        let relayCapable = false;
+        let relayTimer = null;
+        let startedCodec = 'h264';
 
         function setStatus(text, kind) {
             const state = kind || 'muted';
@@ -214,6 +236,8 @@
             pendingIce = [];
             captured = { w: 0, h: 0 };
             iceTypes = { local: new Set(), remote: new Set() };
+            relayCapable = false;
+            startedCodec = els.codec.value;
             try {
                 const body = Object.assign({
                     session: els.session.value || 'auto',
@@ -306,11 +330,15 @@
                     case 'connecting':
                         setStatus(t('machine.remote.connecting'), 'warn'); break;
                     case 'connected':
+                        clearRelayTimer();
                         setStatus(t('machine.remote.live'), 'ok'); hint(''); break;
                     case 'disconnected':
                         setStatus(t('machine.remote.reconnecting'), 'warn'); break;
                     case 'failed':
-                        hint(iceDiagnosis()); teardown('failed'); break;
+                        if (tryRelay('failed')) break;
+                        hint(iceDiagnosis() + relayUnavailableNote());
+                        teardown('failed');
+                        break;
                     case 'closed': break;
                 }
             };
@@ -333,6 +361,90 @@
             const noRelay = !iceTypes.local.has('relay') && !iceTypes.remote.has('relay');
             return t('machine.remote.connection_failed') + ' ' + detail +
                    (noRelay ? ' ' + t('machine.remote.ice_no_relay') : '');
+        }
+
+        // ---- Hub relay fallback -----------------------------------------------------------
+        function canRelay() {
+            return running && !relay && !relaySwitching && relayCapable &&
+                   !!routes.relayDown && !!routes.relayUp &&
+                   !!window.RemoteRelay && window.RemoteRelay.supported();
+        }
+
+        // Why the fallback was not tried, when it would have been. Only the browser case is
+        // worth a sentence: an old agent or a page that cannot relay is not the operator's to
+        // fix from here.
+        function relayUnavailableNote() {
+            if (relayCapable && routes.relayDown && window.RemoteRelay &&
+                    !window.RemoteRelay.supported()) {
+                return ' ' + t('machine.remote.relay_unsupported');
+            }
+            return '';
+        }
+
+        function armRelayTimer() {
+            clearRelayTimer();
+            if (!canRelay()) return;
+            relayTimer = setTimeout(() => {
+                relayTimer = null;
+                if (pc && pc.connectionState !== 'connected') tryRelay('timeout');
+            }, RELAY_AFTER_MS);
+        }
+
+        function clearRelayTimer() {
+            if (relayTimer) { clearTimeout(relayTimer); relayTimer = null; }
+        }
+
+        /** Give up on WebRTC and carry the session through the hub. Returns true if the
+         *  fallback was started (or already is), false if it is not available here -- in which
+         *  case the caller keeps the old behaviour and reports the failure. */
+        function tryRelay(reason) {
+            clearRelayTimer();
+            if (relay || relaySwitching) return true;
+            if (!canRelay()) return false;
+            relaySwitching = true;
+            setStatus(t('machine.remote.connecting'), 'warn');
+            hint(t('machine.remote.relay_switching'));
+            // The peer can only get in the way from here: a late ICE success would start a
+            // second stream into the same <video>. Detach its handlers before closing it so
+            // its 'closed' transition does not run the failure path again.
+            if (pc) {
+                pc.onconnectionstatechange = null;
+                pc.ontrack = null;
+                try { pc.close(); } catch (e) { /* already closed */ }
+                pc = null;
+            }
+            controlChannel = null;
+            const id = sessionId;
+            window.FleetApi.postJson(routes.signal(id), { kind: 'relay', payload: { reason } })
+                .then(() => {
+                    relaySwitching = false;
+                    if (!running || sessionId !== id) return;
+                    relay = window.RemoteRelay.create({
+                        video: els.video,
+                        codec: startedCodec,
+                        downUrl: (after) => routes.relayDown(id, after),
+                        upUrl: () => routes.relayUp(id),
+                        onControl: handleAgentStatus,
+                        onFirstFrame: () => setStatus(t('machine.remote.live_relay'), 'ok'),
+                        onClosed: () => {
+                            if (sessionId !== id) return;
+                            hint(t('machine.remote.session_ended'));
+                            teardown('muted');
+                        },
+                    });
+                    els.cad.disabled = false;
+                    // Same as the DataChannel's onopen: the agent started with what the hub
+                    // queued, and the operator may have changed a control since.
+                    sendConfig();
+                    schedulePoll();
+                })
+                .catch((e) => {
+                    relaySwitching = false;
+                    if (sessionId !== id) return;
+                    hint(t('machine.remote.relay_failed', { error: e.message }));
+                    teardown('failed');
+                });
+            return true;
         }
 
         // Status the agent pushes down the control channel. Without this, "the screen went
@@ -392,7 +504,10 @@
 
         function schedulePoll() {
             if (!running) return;
-            const connected = pc && pc.connectionState === 'connected';
+            if (pollTimer) { clearTimeout(pollTimer); pollTimer = null; }
+            // Relayed counts as connected: the media has its own long-poll, and this one is
+            // only waiting for the session to end.
+            const connected = !!relay || (pc && pc.connectionState === 'connected');
             pollTimer = setTimeout(poll, connected ? POLL_CONNECTED_MS : POLL_INTERVAL_MS);
         }
 
@@ -416,9 +531,11 @@
         }
 
         async function handleSignal(sig) {
+            if (sig.kind === 'bye') { teardown('muted'); return; }
             if (!pc) return;
             try {
                 if (sig.kind === 'offer') {
+                    relayCapable = !!(sig.payload && sig.payload.relay);
                     await pc.setRemoteDescription({ type: 'offer', sdp: sig.payload.sdp });
                     remoteSet = true;
                     for (const ice of pendingIce) await pc.addIceCandidate(ice).catch(() => {});
@@ -426,6 +543,7 @@
                     const answer = await pc.createAnswer();
                     await pc.setLocalDescription(answer);
                     await postSignal('answer', { type: 'answer', sdp: answer.sdp });
+                    armRelayTimer();
                 } else if (sig.kind === 'ice') {
                     // RTCIceCandidate.type is only populated on candidates WE created, so the
                     // agent's type is read off the SDP line: "... <ip> <port> typ <type> ...".
@@ -438,8 +556,6 @@
                     };
                     if (remoteSet) await pc.addIceCandidate(cand).catch(() => {});
                     else pendingIce.push(cand);
-                } else if (sig.kind === 'bye') {
-                    teardown('muted');
                 }
             } catch (e) {
                 hint(t('machine.remote.signaling_error', { error: e.message }));
@@ -468,6 +584,10 @@
         function teardown(statusKind) {
             running = false;
             if (pollTimer) { clearTimeout(pollTimer); pollTimer = null; }
+            clearRelayTimer();
+            if (relay) { relay.stop(); relay = null; }
+            relaySwitching = false;
+            relayCapable = false;
             if (pc) { try { pc.close(); } catch (e) {} pc = null; }
             controlChannel = null;
             if (els.video.srcObject) {
@@ -496,6 +616,7 @@
         }
 
         function sendControl(obj) {
+            if (relay) { relay.send(obj); return; }
             if (controlChannel && controlChannel.readyState === 'open') {
                 try { controlChannel.send(JSON.stringify(obj)); } catch (e) { /* dropped */ }
             }
