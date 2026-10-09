@@ -116,9 +116,13 @@ _registry_lock = threading.Lock()
 
 
 def open_relay(session_id, machine):
-    """Create (or return) the relay for a session. Idempotent -- the console may ask twice if
-    its first request timed out -- and the place idle relays are swept, since every new one is
-    a moment someone is paying attention to relay memory."""
+    """Create (or return) the relay for a session. Returns (relay, created).
+
+    Idempotent -- the console may ask twice if its first request timed out -- and `created` is
+    decided under the registry lock, so of two requests racing to open the same relay exactly
+    one is told it created it. remote_web audits on that, which is what keeps the switch to
+    one audit row however the retries land. Also the place idle relays are swept, since every
+    new one is a moment someone is paying attention to relay memory."""
     session_id = str(session_id)
     now = time.time()
     with _registry_lock:
@@ -126,10 +130,11 @@ def open_relay(session_id, machine):
                     if r.closed or now - r.last_activity > IDLE_DROP_SECONDS]:
             _drop_locked(sid)
         relay = _registry.get(session_id)
-        if relay is None:
-            relay = Relay(session_id, str(machine))
-            _registry[session_id] = relay
-        return relay
+        if relay is not None:
+            return relay, False
+        relay = Relay(session_id, str(machine))
+        _registry[session_id] = relay
+        return relay, True
 
 
 def get_relay(session_id):

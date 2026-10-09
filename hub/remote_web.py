@@ -370,42 +370,55 @@ def create_remote_blueprint(db_path, login_required, access, env_path=None):
     @scoped_session
     def console_signal(session_id, sess):
         data = request.get_json(silent=True) or {}
+        relay_created = False
         if data.get("kind") == "relay":
-            refused = _open_relay(session_id, sess, data.get("payload"))
+            refused, relay_created = _open_relay(session_id, sess)
             if refused is not None:
                 return refused
         try:
             seq = remote.add_signal(db_path, session_id, remote.SENDER_CONSOLE,
                                     data.get("kind"), data.get("payload"))
-        except KeyError:
-            return jsonify({"error": "unknown session"}), 404
-        except PermissionError as e:
-            return refusals.refuse(e, 409)
-        except ValueError as e:
+        except (KeyError, PermissionError, ValueError) as e:
+            # A relay this request opened for a signal the agent will now never hear would sit
+            # open, unused, until the idle sweep. Close it; a retry opens it again.
+            if relay_created:
+                remote_relay.close_relay(session_id)
+            if isinstance(e, KeyError):
+                return jsonify({"error": "unknown session"}), 404
+            if isinstance(e, PermissionError):
+                return refusals.refuse(e, 409)
             return refusals.refuse(e)
-        return jsonify({"seq": seq}), 200
-
-    def _open_relay(session_id, sess, payload):
-        """Open the relay for a console's `relay` signal, BEFORE the agent can hear about it, so
-        its first upload finds somewhere to land. Returns a refusal response, or None to go on
-        and queue the signal.
-
-        Refused outright when the fallback is switched off: the agent would otherwise drop its
-        peer for a path that answers 409. Audited once per session -- from here on the hub sees
-        the picture in the clear (remote_relay's module docstring) -- and only once, because a
-        console that retries a timed-out request must not write a second row."""
-        if not settings.get_bool(db_path, "remote.relay_fallback"):
-            return jsonify({"error": "Relaying through the hub is turned off in Settings."}), 403
-        if not _relay_session_live(sess):
-            return jsonify({"error": "session is not active"}), 409
-        already = remote_relay.get_relay(session_id) is not None
-        remote_relay.open_relay(session_id, sess["machine"])
-        if not already:
+        if relay_created:
+            # Audited only once the switch is real -- the signal is queued, so the agent will
+            # act on it -- and only by the request that created the relay, so a console that
+            # retries a timed-out request, or two retries racing, write one row between them.
+            # From here on the hub sees the picture in the clear (remote_relay's docstring).
+            payload = data.get("payload")
             reason = payload.get("reason") if isinstance(payload, dict) else ""
             fleet.audit(db_path, actor=_current_email(), action="remote_session_relay",
                         level=fleet.LEVEL_SECURITY, target=sess["machine"],
                         detail={"session_id": session_id, "reason": str(reason or "")[:120]})
-        return None
+        return jsonify({"seq": seq}), 200
+
+    def _open_relay(session_id, sess):
+        """Open the relay for a console's `relay` signal. Returns (refusal, created): a refusal
+        response or None, and whether THIS call created the relay.
+
+        Opened BEFORE the signal is queued, not after, and that order is deliberate. The other
+        way round, the agent can poll the signal, switch, and upload before the relay exists --
+        and an agent that is refused an upload ends the session, which would turn the fallback
+        into the failure. The cost of this order, a relay open for a signal that then failed, is
+        undone by the caller (it closes what it created).
+
+        Refused outright when the fallback is switched off: the agent would otherwise drop its
+        peer for a path that answers 409."""
+        if not settings.get_bool(db_path, "remote.relay_fallback"):
+            return (jsonify({"error": "Relaying through the hub is turned off in Settings."}),
+                    403), False
+        if not _relay_session_live(sess):
+            return (jsonify({"error": "session is not active"}), 409), False
+        _, created = remote_relay.open_relay(session_id, sess["machine"])
+        return None, created
 
     @bp.route("/api/remote/session/<session_id>/poll", methods=["GET"])
     @login_required

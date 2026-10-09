@@ -188,6 +188,15 @@ def main():
             return fleet.list_audit(db_path, action="remote_session_relay")["entries"]
 
         before = len(relay_audit_rows())
+        # A relay signal the hub then refuses to queue (here: a payload over the signal cap).
+        # The agent will never hear it, so nothing may be left behind: no open relay, and no
+        # audit row claiming a switch that did not happen.
+        r = c.post(f"/api/remote/session/{sid}/signal",
+                   json={"kind": "relay", "payload": {"reason": "x" * (70 * 1024)}})
+        check("a relay signal that cannot be queued is refused -> 400", r.status_code == 400)
+        check("and closes the relay it opened", remote_relay.get_relay(sid) is None)
+        check("and writes no audit row", len(relay_audit_rows()) == before)
+
         r = c.post(f"/api/remote/session/{sid}/signal",
                    json={"kind": "relay", "payload": {"reason": "failed"}})
         check("the console asks for the relay -> 200", r.status_code == 200)

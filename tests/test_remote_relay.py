@@ -185,8 +185,10 @@ def test_new_frame_wakes_waiter():
 
 def test_open_is_idempotent_and_sweeps():
     print("open is idempotent and sweeps idle relays")
-    a = rr.open_relay("s7", "PC-01")
-    check("opening twice returns the same relay", rr.open_relay("s7", "PC-01") is a)
+    a, created = rr.open_relay("s7", "PC-01")
+    again, created_again = rr.open_relay("s7", "PC-01")
+    check("opening twice returns the same relay", again is a)
+    check("and only the first open reports that it created it", created and not created_again)
     a.last_activity -= rr.IDLE_DROP_SECONDS + 1
     rr.open_relay("s8", "PC-02")
     check("a relay idle past the limit is dropped on the next open", rr.get_relay("s7") is None)
