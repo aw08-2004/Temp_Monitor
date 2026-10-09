@@ -203,18 +203,25 @@
             return true;
         }
 
+        /** One chunk, retried with a growing pause until settled or out of attempts. Chunks
+         *  go up in order and one at a time ON PURPOSE -- the hub appends to one stream -- and
+         *  the retry recurses rather than looping, which says the same thing without an await
+         *  inside a loop. */
+        async function attempt(url, blob, tries) {
+            const res = await call('PUT', url, undefined, blob).catch(() => null);
+            if (settled(res)) return;
+            if (tries >= MAX_CHUNK_RETRIES) {
+                stopLocal();
+                setState('failed', { error: t('recordings.upload_failed') });
+                return;
+            }
+            await sleep(1000 * (tries + 1));
+            await attempt(url, blob, tries + 1);
+        }
+
         async function upload(n, blob) {
             if (!rec || state === 'ended' || state === 'failed') return;
-            const url = `${base}${encodeURIComponent(rec.id)}/chunks/${n}`;
-            // In order and one at a time ON PURPOSE -- the hub appends to one stream -- so the
-            // await inside this loop is the design, not an oversight.
-            for (let attempt = 0; attempt <= MAX_CHUNK_RETRIES; attempt++) {
-                const res = await call('PUT', url, undefined, blob).catch(() => null);
-                if (settled(res)) return;
-                await sleep(1000 * (attempt + 1));
-            }
-            stopLocal();
-            setState('failed', { error: t('recordings.upload_failed') });
+            await attempt(`${base}${encodeURIComponent(rec.id)}/chunks/${n}`, blob, 0);
         }
 
         async function tick() {
