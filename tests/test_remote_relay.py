@@ -141,6 +141,32 @@ def test_up_stream():
           messages == ['{"t":"d","b":0,"x":0.5,"y":0.5}', '{"t":"u","b":0}'] and cursor == 2)
     messages, _, _ = rr.read_up("s4", cursor, wait_seconds=0)
     check("and are not handed out twice", messages == [])
+    check("asking from a cursor acknowledges everything up to it",
+          len(rr.get_relay("s4").up) == 0)
+
+    # A long session must never hit the cap: only UNREAD input counts. Before review of #115
+    # nothing discarded read messages, so the thousandth message of any session started
+    # dropping input.
+    cursor = 0
+    for _ in range(3):
+        rr.push_up("s4", [{"t": "m", "x": 0.1, "y": 0.1}] * (rr.MAX_UP_MESSAGES // 2))
+        _, cursor, _ = rr.read_up("s4", cursor, wait_seconds=0)
+        rr.read_up("s4", cursor, wait_seconds=0)   # the next poll acknowledges
+    check("input well past the cap over a session is accepted while the agent reads it",
+          rr.push_up("s4", [{"t": "m", "x": 0.2, "y": 0.2}]) == 1)
+
+    # An agent that stopped reading: the batch that would overflow is refused whole.
+    relay = rr.get_relay("s4")
+    backlog = rr.MAX_UP_MESSAGES - len(relay.up)
+    rr.push_up("s4", [{"t": "m", "x": 0.3, "y": 0.3}] * backlog)
+    before = len(relay.up)
+    refused = False
+    try:
+        rr.push_up("s4", [{"t": "k", "code": "KeyA", "down": False}])
+    except rr.RelayBacklogFull:
+        refused = True
+    check("a full backlog refuses new input rather than dropping old", refused)
+    check("and nothing already queued was lost", len(relay.up) == before)
     rr.close_relay("s4")
 
 

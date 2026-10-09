@@ -491,6 +491,10 @@ def create_remote_blueprint(db_path, login_required, access, env_path=None):
             return jsonify({"error": "messages must be a list of at most 200"}), 400
         try:
             queued = remote_relay.push_up(session_id, messages)
+        except remote_relay.RelayBacklogFull:
+            # The agent stopped reading. 429 rather than a silent drop; the viewer retries,
+            # and a session whose agent is gone ends through the down stream's state.
+            return jsonify({"error": "The machine is not keeping up with input."}), 429
         except ValueError as e:
             return refusals.refuse(e)
         if queued is None:

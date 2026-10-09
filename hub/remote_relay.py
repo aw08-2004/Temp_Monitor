@@ -70,8 +70,10 @@ MAX_UPLOAD_BYTES = 16 * 1024 * 1024
 MAX_DOWN_RECORDS = 240
 MAX_DOWN_BYTES = 24 * 1024 * 1024
 
-#: Up-stream (input) queue per session. Mouse moves are already throttled to ~25/s in the
-#: browser, so this is minutes of input; hitting it means the agent stopped reading.
+#: Up-stream (input) messages the agent has NOT YET READ, per session. The queue holds only
+#: unread input -- read_up discards what the agent's cursor acknowledges -- so this bounds a
+#: backlog, not a session's lifetime; mouse moves are throttled to ~25/s in the browser and
+#: collapsed while a POST is in flight, so reaching it means the agent stopped reading.
 MAX_UP_MESSAGES = 1000
 MAX_UP_MESSAGE_BYTES = 4096
 
@@ -339,13 +341,23 @@ def read_down(session_id, after, wait_seconds=DEFAULT_WAIT_SECONDS, max_bytes=MA
 
 
 # --------------------------------------------------------------------------- up stream
+class RelayBacklogFull(Exception):
+    """The agent has stopped reading input. Raised rather than dropping the oldest message:
+    input is never skipped, because a dropped key-up is a key held down on somebody's PC."""
+
+
 def push_up(session_id, messages):
     """Queue console input/config messages for the agent. `messages` is a list of dicts; each
     is serialised once here so the agent receives exactly the JSON the WebRTC control channel
     would have carried. Returns how many were queued, or None if the relay is not open.
 
     Raises ValueError for a message that is not an object or is oversized -- input arrives from
-    a browser, and a 1 MB "mouse move" is not one.
+    a browser, and a 1 MB "mouse move" is not one -- and RelayBacklogFull when the agent has
+    MAX_UP_MESSAGES unread already. The whole batch is refused then, never part of it.
+
+    Until review of #115 this trimmed the oldest messages past the cap instead, and nothing
+    ever discarded messages the agent had already read -- so every session dropped input once
+    it had sent a thousand messages in total, a few minutes of mouse movement in.
     """
     encoded = []
     for message in messages:
@@ -361,11 +373,11 @@ def push_up(session_id, messages):
     with relay.cond:
         if relay.closed:
             return None
+        if len(relay.up) + len(encoded) > MAX_UP_MESSAGES:
+            raise RelayBacklogFull("the agent is not reading input")
         for text in encoded:
             relay.up.append((relay.up_next, text))
             relay.up_next += 1
-        while len(relay.up) > MAX_UP_MESSAGES:
-            relay.up.popleft()
         relay._touch()
         relay.cond.notify_all()
     return len(encoded)
@@ -374,12 +386,18 @@ def push_up(session_id, messages):
 def read_up(session_id, after, wait_seconds=DEFAULT_WAIT_SECONDS):
     """Long-poll a session's up stream (the agent's side). Returns (messages, next_cursor,
     state) where messages are JSON strings, oldest first. Unlike the down stream there is no
-    resync: input is never skipped to catch up, because a dropped key-up is a key held down."""
+    resync: input is never skipped to catch up, because a dropped key-up is a key held down.
+
+    **`after` is also the agent's acknowledgement**: it only asks from N once it has every
+    message up to N, so those are discarded here. That is what keeps the queue to unread input
+    and lets push_up refuse a real backlog rather than a long session."""
     after = _cursor(after)
     relay = get_relay(session_id)
     if relay is None:
         return [], after, "closed"
     with relay.cond:
+        while relay.up and relay.up[0][0] <= after:
+            relay.up.popleft()
         outcome = _wait_for(relay, relay.up, after, wait_seconds)
         if outcome != "ready":
             return [], after, "closed" if outcome == "closed" else "open"

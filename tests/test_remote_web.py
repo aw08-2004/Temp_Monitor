@@ -268,6 +268,16 @@ def main():
         r = c.get(f"/api/agent/remote/{sid}/relay/up?after=0", headers=other_auth)
         check("a foreign agent cannot read this session's input -> 404", r.status_code == 404)
 
+        # An agent that stopped reading: input is refused with 429, never silently dropped.
+        saved_up = remote_relay.MAX_UP_MESSAGES
+        remote_relay.MAX_UP_MESSAGES = 2
+        try:
+            r = c.post(f"/api/remote/session/{sid}/relay/up",
+                       json={"messages": [{"t": "m"}, {"t": "m"}, {"t": "m"}]})
+            check("input past an unread backlog -> 429", r.status_code == 429)
+        finally:
+            remote_relay.MAX_UP_MESSAGES = saved_up
+
         CURRENT_USER = "tech@x.com"
         r = c.get(f"/api/remote/session/{pc09_relay_sid}/relay/down?after=0")
         check("an out-of-scope operator cannot read another machine's frames -> 404",
