@@ -49,135 +49,90 @@ BROWSER_END_REASONS = (recordings.END_STOPPED, recordings.END_TIME_LIMIT,
 _badges_dropped = set()
 
 
-def create_recordings_blueprint(db_path, login_required, access, root):
-    """`root` is where recordings live on disk (app.RECORDINGS_ROOT): one folder per owner."""
-    bp = Blueprint("recordings", __name__)
+class _RecordingRoutes:
+    """The route handlers, as methods rather than closures inside the factory.
 
-    def _me():
+    Behaviour is exactly what the closures did. They moved because a closure's branches count
+    toward the function that encloses it, so a blueprint factory holding eleven handlers was
+    scored as one function of complexity 98 (SonarCloud S3776 on #116), and a quality gate
+    that allows no new critical smell refused it. The factory below now only registers routes
+    and applies gates; everything that decides anything is here, one method per question."""
+
+    def __init__(self, db_path, access, root):
+        self.db_path = db_path
+        self.access = access
+        self.root = root
+
+    # ---------------- helpers ----------------
+    @staticmethod
+    def me():
         return permissions.normalize_email(permissions_web.current_actor())
 
-    def _my_groups():
-        return [g["id"] for g in access.current().get("groups") or []]
+    def my_groups(self):
+        return [g["id"] for g in self.access.current().get("groups") or []]
 
-    def _session_live(session_id):
-        return remote.is_session_live(db_path, session_id)
+    def session_live(self, session_id):
+        return remote.is_session_live(self.db_path, session_id)
 
-    def _drop_badge(rec):
+    def drop_badge(self, rec):
         """Ask the PC to take the badge down for a recording that has ended. Best effort: if
         the session is gone, the helper is gone, and its badge with it."""
         if rec is None or rec["id"] in _badges_dropped or rec["status"] in recordings.LIVE_STATUSES:
             return
         _badges_dropped.add(rec["id"])
-        if not _session_live(rec["session_id"]):
+        if not self.session_live(rec["session_id"]):
             return
         try:
-            remote.add_signal(db_path, rec["session_id"], remote.SENDER_CONSOLE, "record",
+            remote.add_signal(self.db_path, rec["session_id"], remote.SENDER_CONSOLE, "record",
                               {"recording_id": rec["id"], "on": False})
         except (KeyError, PermissionError, ValueError):
             pass
 
-    def _reconcile():
-        for rec in recordings.reconcile(db_path, _session_live):
-            _drop_badge(rec)
+    def reconcile(self):
+        for rec in recordings.reconcile(self.db_path, self.session_live):
+            self.drop_badge(rec)
 
-    def _public(rec, *, owned):
+    def public(self, rec, *, owned):
         out = {k: rec[k] for k in (
             "id", "machine", "owner", "reason", "status", "created_at", "confirmed_at",
             "deadline", "extensions", "ended_at", "end_reason", "size_bytes",
             "duration_seconds")}
         # Only the owner sees who else may watch it: they are the only one who can change it.
         if owned:
-            out["shares"] = recordings.shares(db_path, rec["id"])
+            out["shares"] = recordings.shares(self.db_path, rec["id"])
         return out
 
-    def _owned_or_404(recording_id):
+    def owned_or_none(self, recording_id):
         if not recordings.is_recording_id(recording_id):
             return None
-        rec = recordings.get(db_path, recording_id)
-        if rec is None or rec["owner"] != _me():
+        rec = recordings.get(self.db_path, recording_id)
+        if rec is None or rec["owner"] != self.me():
             return None
         return rec
 
-    def _not_found():
+    @staticmethod
+    def not_found():
         return jsonify({"error": "unknown recording"}), 404
 
-    def _may_record(machine):
-        return access.can(permissions.REMOTE_CONTROL) and access.in_scope(machine)
+    def may_record(self, machine):
+        return self.access.can(permissions.REMOTE_CONTROL) and self.access.in_scope(machine)
 
-    def _closed(exc):
+    @staticmethod
+    def no_access(machine):
+        return jsonify({"error": f"You do not have access to {machine!r}."}), 403
+
+    def closed(self, exc):
         """A 409 carrying the recording, so the browser can tell the operator why it ended."""
-        _drop_badge(exc.recording)
+        self.drop_badge(exc.recording)
         return jsonify({"error": "This recording has ended.",
-                        "recording": _public(exc.recording, owned=True)}), 409
+                        "recording": self.public(exc.recording, owned=True)}), 409
 
-    # ---------------- Making a recording (remote_control + scope) ----------------
-    @bp.route("/api/remote/<machine>/recordings", methods=["POST"])
-    @login_required
-    @access.require_machine(permissions.REMOTE_CONTROL)
-    def start_recording(machine):
-        data = request.get_json(silent=True) or {}
-        sess = remote.get_session(db_path, str(data.get("session_id") or ""))
-        if sess is None or sess["machine"] != machine:
-            return jsonify({"error": "unknown session"}), 404
-        if not _session_live(sess["id"]):
-            return jsonify({"error": "That session has ended."}), 409
-        if permissions.normalize_email(sess["issued_by"]) != _me():
-            return jsonify({"error": "Only the operator viewing this session can record "
-                                     "it."}), 403
-        _reconcile()
-        try:
-            rec = recordings.create(db_path, session_id=sess["id"], machine=machine,
-                                    owner=_me(), reason=data.get("reason"),
-                                    mime=data.get("mime"))
-        except ValueError as e:
-            return refusals.refuse(e)
-        try:
-            remote.add_signal(db_path, sess["id"], remote.SENDER_CONSOLE, "record",
-                              {"recording_id": rec["id"], "on": True})
-        except (KeyError, PermissionError, ValueError) as e:
-            recordings.finish(db_path, rec["id"], recordings.END_BADGE_FAILED, actor=_me())
-            return refusals.refuse(e, 409)
-        return jsonify(_public(rec, owned=True)), 201
+    def with_clock(self, rec):
+        """`server_time` lets the browser run its countdown against the hub's clock."""
+        return jsonify(dict(self.public(rec, owned=True), server_time=int(time.time()))), 200
 
-    @bp.route("/api/remote/recordings/<recording_id>", methods=["GET"])
-    @login_required
-    def recording_status(recording_id):
-        """Polled by the recording browser: first for the PC's badge confirmation, then for
-        an ending it did not cause. `server_time` lets it run the countdown against the hub's
-        clock rather than its own."""
-        _reconcile()
-        rec = _owned_or_404(recording_id)
-        if rec is None:
-            return _not_found()
-        return jsonify(dict(_public(rec, owned=True), server_time=int(time.time()))), 200
-
-    @bp.route("/api/remote/recordings/<recording_id>/chunks/<int:seq>", methods=["PUT"])
-    @login_required
-    def recording_chunk(recording_id, seq):
-        rec = _owned_or_404(recording_id)
-        if rec is None:
-            return _not_found()
-        if not _may_record(rec["machine"]):
-            return jsonify({"error": f"You do not have access to {rec['machine']!r}."}), 403
-        if not _session_live(rec["session_id"]):
-            recordings.finish(db_path, rec["id"], recordings.END_SESSION_ENDED)
-            return _closed(recordings.RecordingClosed(recordings.get(db_path, rec["id"])))
-        data = _read_capped(recordings.MAX_CHUNK_BYTES)
-        if data is None:
-            return jsonify({"error": "chunk too large"}), 413
-        try:
-            rec = recordings.append(db_path, root, rec["id"], seq, data)
-        except recordings.RecordingClosed as e:
-            return _closed(e)
-        except KeyError:
-            return _not_found()
-        except ValueError as e:
-            return refusals.refuse(e)
-        return jsonify({"next_seq": rec["next_seq"], "size_bytes": rec["size_bytes"],
-                        "deadline": rec["deadline"], "status": rec["status"],
-                        "server_time": int(time.time())}), 200
-
-    def _read_capped(limit):
+    @staticmethod
+    def read_capped(limit):
         """The request body, or None if it is longer than `limit`, read without holding more
         than `limit + 1` bytes -- remote_web._read_capped's reasoning: a chunked request has
         no Content-Length, and the hub sets no MAX_CONTENT_LENGTH."""
@@ -192,35 +147,213 @@ def create_recordings_blueprint(db_path, login_required, access, root):
             size += len(chunk)
         return None if size > limit else b"".join(chunks)
 
+    # ---------------- making a recording ----------------
+    def recordable_session(self, machine, session_id):
+        """The session to record, or the refusal: it must be this PC's, still live, and the
+        caller's own -- the recording is of THEIR viewer's picture."""
+        sess = remote.get_session(self.db_path, str(session_id or ""))
+        if sess is None or sess["machine"] != machine:
+            return None, (jsonify({"error": "unknown session"}), 404)
+        if not self.session_live(sess["id"]):
+            return None, (jsonify({"error": "That session has ended."}), 409)
+        if permissions.normalize_email(sess["issued_by"]) != self.me():
+            return None, (jsonify({"error": "Only the operator viewing this session can "
+                                            "record it."}), 403)
+        return sess, None
+
+    def start(self, machine):
+        data = request.get_json(silent=True) or {}
+        sess, refused = self.recordable_session(machine, data.get("session_id"))
+        if refused:
+            return refused
+        self.reconcile()
+        try:
+            rec = recordings.create(self.db_path, session_id=sess["id"], machine=machine,
+                                    owner=self.me(), reason=data.get("reason"),
+                                    mime=data.get("mime"))
+        except ValueError as e:
+            return refusals.refuse(e)
+        try:
+            remote.add_signal(self.db_path, sess["id"], remote.SENDER_CONSOLE, "record",
+                              {"recording_id": rec["id"], "on": True})
+        except (KeyError, PermissionError, ValueError) as e:
+            recordings.finish(self.db_path, rec["id"], recordings.END_BADGE_FAILED,
+                              actor=self.me())
+            return refusals.refuse(e, 409)
+        return jsonify(self.public(rec, owned=True)), 201
+
+    def status(self, recording_id):
+        """Polled by the recording browser: first for the PC's badge confirmation, then for
+        an ending it did not cause."""
+        self.reconcile()
+        rec = self.owned_or_none(recording_id)
+        return self.not_found() if rec is None else self.with_clock(rec)
+
+    def chunk(self, recording_id, seq):
+        rec = self.owned_or_none(recording_id)
+        if rec is None:
+            return self.not_found()
+        if not self.may_record(rec["machine"]):
+            return self.no_access(rec["machine"])
+        if not self.session_live(rec["session_id"]):
+            recordings.finish(self.db_path, rec["id"], recordings.END_SESSION_ENDED)
+            return self.closed(recordings.RecordingClosed(recordings.get(self.db_path, rec["id"])))
+        data = self.read_capped(recordings.MAX_CHUNK_BYTES)
+        if data is None:
+            return jsonify({"error": "chunk too large"}), 413
+        try:
+            rec = recordings.append(self.db_path, self.root, rec["id"], seq, data)
+        except recordings.RecordingClosed as e:
+            return self.closed(e)
+        except KeyError:
+            return self.not_found()
+        except ValueError as e:
+            return refusals.refuse(e)
+        return jsonify({"next_seq": rec["next_seq"], "size_bytes": rec["size_bytes"],
+                        "deadline": rec["deadline"], "status": rec["status"],
+                        "server_time": int(time.time())}), 200
+
+    def extend(self, recording_id):
+        rec = self.owned_or_none(recording_id)
+        if rec is None:
+            return self.not_found()
+        if not self.may_record(rec["machine"]):
+            return self.no_access(rec["machine"])
+        try:
+            rec = recordings.extend(self.db_path, rec["id"], actor=self.me())
+        except recordings.RecordingClosed as e:
+            return self.closed(e)
+        except ValueError as e:
+            return refusals.refuse(e, 409)
+        return self.with_clock(rec)
+
+    def stop(self, recording_id):
+        rec = self.owned_or_none(recording_id)
+        if rec is None:
+            return self.not_found()
+        reason = (request.get_json(silent=True) or {}).get("reason")
+        if reason not in BROWSER_END_REASONS:
+            reason = recordings.END_STOPPED
+        recordings.finish(self.db_path, rec["id"], reason, actor=self.me())
+        rec = recordings.get(self.db_path, rec["id"])
+        self.drop_badge(rec)
+        return jsonify(self.public(rec, owned=True)), 200
+
+    # ---------------- the library ----------------
+    def library(self):
+        self.reconcile()
+        me = self.me()
+        return jsonify({
+            "owned": [self.public(r, owned=True)
+                      for r in recordings.list_owned(self.db_path, me)],
+            "shared": [self.public(r, owned=False)
+                       for r in recordings.list_shared_with(self.db_path, me, self.my_groups())],
+            "usage": recordings.usage(self.db_path, me),
+            # Names for the share editor and for showing an owner's existing group shares.
+            # Ids and names only -- membership is not anybody else's business.
+            "groups": [{"id": g["id"], "name": g["name"]}
+                       for g in permissions.list_groups(self.db_path)],
+        }), 200
+
+    def viewable_or_none(self, recording_id):
+        if not recordings.is_recording_id(recording_id):
+            return None
+        rec = recordings.get(self.db_path, recording_id)
+        return rec if recordings.can_view(self.db_path, rec, self.me(), self.my_groups()) else None
+
+    def video(self, recording_id):
+        """The file, for the player (ranged, so it can seek) or as a download (`?download=1`).
+        Only once it has ended: a file still being appended to cannot be played to the end
+        or sought in, and is not yet the recording anyone was asked to keep.
+
+        Watching is deliberately NOT audited; downloading is. That is the owner's decision
+        (ROADMAP #19): a download is a copy leaving the hub, while a player issues a stream of
+        range requests that would bury the audit log in rows saying the same thing."""
+        rec = self.viewable_or_none(recording_id)
+        if rec is None:
+            return self.not_found()
+        if rec["status"] != recordings.STATUS_ENDED or not rec["size_bytes"]:
+            return jsonify({"error": "This recording has no video to show yet."}), 409
+        try:
+            path = recordings.file_path(self.root, rec)
+        except ValueError:
+            return self.not_found()
+        download = request.args.get("download") == "1"
+        if download:
+            fleet.audit(self.db_path, actor=self.me(), action="recording_download",
+                        level=fleet.LEVEL_SECURITY, target=rec["machine"],
+                        detail={"recording_id": rec["id"], "owner": rec["owner"]})
+        stamp = time.strftime("%Y%m%d-%H%M", time.localtime(rec["created_at"]))
+        try:
+            resp = send_file(path, mimetype=rec["mime"].split(";")[0], conditional=True,
+                             as_attachment=download,
+                             download_name=f"{rec['machine']}-{stamp}{recordings.FILE_EXTENSION}")
+        except FileNotFoundError:
+            return jsonify({"error": "The video file is missing on the hub."}), 410
+        resp.headers["Cache-Control"] = "private, no-store"
+        return resp
+
+    def update_shares(self, recording_id):
+        """Owner only -- the no-re-sharing rule is this check."""
+        rec = self.owned_or_none(recording_id)
+        if rec is None:
+            return self.not_found()
+        data = request.get_json(silent=True) or {}
+        groups, users = data.get("groups") or [], data.get("users") or []
+        if not isinstance(groups, list) or not isinstance(users, list):
+            return jsonify({"error": "groups and users must be lists"}), 400
+        try:
+            recordings.set_shares(self.db_path, rec, groups=groups, users=users, actor=self.me())
+        except ValueError as e:
+            return refusals.refuse(e)
+        return jsonify(self.public(recordings.get(self.db_path, rec["id"]), owned=True)), 200
+
+    def delete(self, recording_id):
+        rec = self.owned_or_none(recording_id)
+        if rec is None:
+            return self.not_found()
+        try:
+            recordings.delete(self.db_path, self.root, rec, actor=self.me())
+        except ValueError as e:
+            return refusals.refuse(e, 409)
+        self.drop_badge(dict(rec, status=recordings.STATUS_ENDED))
+        return jsonify({"status": "deleted"}), 200
+
+
+def create_recordings_blueprint(db_path, login_required, access, root):
+    """`root` is where recordings live on disk (app.RECORDINGS_ROOT): one folder per owner.
+
+    Registration and gates only -- the handlers are _RecordingRoutes'. The endpoint names
+    are the old closures' names, which templates resolve with url_for."""
+    bp = Blueprint("recordings", __name__)
+    routes = _RecordingRoutes(db_path, access, root)
+
+    # ---------------- Making a recording (remote_control + scope) ----------------
+    @bp.route("/api/remote/<machine>/recordings", methods=["POST"])
+    @login_required
+    @access.require_machine(permissions.REMOTE_CONTROL)
+    def start_recording(machine):
+        return routes.start(machine)
+
+    @bp.route("/api/remote/recordings/<recording_id>", methods=["GET"])
+    @login_required
+    def recording_status(recording_id):
+        return routes.status(recording_id)
+
+    @bp.route("/api/remote/recordings/<recording_id>/chunks/<int:seq>", methods=["PUT"])
+    @login_required
+    def recording_chunk(recording_id, seq):
+        return routes.chunk(recording_id, seq)
+
     @bp.route("/api/remote/recordings/<recording_id>/extend", methods=["POST"])
     @login_required
     def extend_recording(recording_id):
-        rec = _owned_or_404(recording_id)
-        if rec is None:
-            return _not_found()
-        if not _may_record(rec["machine"]):
-            return jsonify({"error": f"You do not have access to {rec['machine']!r}."}), 403
-        try:
-            rec = recordings.extend(db_path, rec["id"], actor=_me())
-        except recordings.RecordingClosed as e:
-            return _closed(e)
-        except ValueError as e:
-            return refusals.refuse(e, 409)
-        return jsonify(dict(_public(rec, owned=True), server_time=int(time.time()))), 200
+        return routes.extend(recording_id)
 
     @bp.route("/api/remote/recordings/<recording_id>/stop", methods=["POST"])
     @login_required
     def stop_recording(recording_id):
-        rec = _owned_or_404(recording_id)
-        if rec is None:
-            return _not_found()
-        reason = (request.get_json(silent=True) or {}).get("reason") or recordings.END_STOPPED
-        if reason not in BROWSER_END_REASONS:
-            reason = recordings.END_STOPPED
-        recordings.finish(db_path, rec["id"], reason, actor=_me())
-        rec = recordings.get(db_path, rec["id"])
-        _drop_badge(rec)
-        return jsonify(_public(rec, owned=True)), 200
+        return routes.stop(recording_id)
 
     # ---------------- The library (owner or share) ----------------
     @bp.route("/recordings", methods=["GET"])
@@ -231,84 +364,21 @@ def create_recordings_blueprint(db_path, login_required, access, root):
     @bp.route("/api/recordings", methods=["GET"])
     @login_required
     def list_recordings():
-        _reconcile()
-        me = _me()
-        groups = _my_groups()
-        return jsonify({
-            "owned": [_public(r, owned=True) for r in recordings.list_owned(db_path, me)],
-            "shared": [_public(r, owned=False)
-                       for r in recordings.list_shared_with(db_path, me, groups)],
-            "usage": recordings.usage(db_path, me),
-            # Names for the share editor and for showing an owner's existing group shares.
-            # Ids and names only -- membership is not anybody else's business.
-            "groups": [{"id": g["id"], "name": g["name"]}
-                       for g in permissions.list_groups(db_path)],
-        }), 200
+        return routes.library()
 
     @bp.route("/api/recordings/<recording_id>/video", methods=["GET"])
     @login_required
     def recording_video(recording_id):
-        """The file, for the player (ranged, so it can seek) or as a download (`?download=1`).
-        Only once it has ended: a file still being appended to cannot be played to the end
-        or sought in, and is not yet the recording anyone was asked to keep.
-
-        Watching is deliberately NOT audited; downloading is. That is the owner's decision
-        (ROADMAP #19): a download is a copy leaving the hub, while a player issues a stream of
-        range requests that would bury the audit log in rows saying the same thing."""
-        if not recordings.is_recording_id(recording_id):
-            return _not_found()
-        rec = recordings.get(db_path, recording_id)
-        if not recordings.can_view(db_path, rec, _me(), _my_groups()):
-            return _not_found()
-        if rec["status"] != recordings.STATUS_ENDED or not rec["size_bytes"]:
-            return jsonify({"error": "This recording has no video to show yet."}), 409
-        download = request.args.get("download") == "1"
-        if download:
-            fleet.audit(db_path, actor=_me(), action="recording_download",
-                        level=fleet.LEVEL_SECURITY, target=rec["machine"],
-                        detail={"recording_id": rec["id"], "owner": rec["owner"]})
-        stamp = time.strftime("%Y%m%d-%H%M", time.localtime(rec["created_at"]))
-        name = f"{rec['machine']}-{stamp}{recordings.FILE_EXTENSION}"
-        try:
-            path = recordings.file_path(root, rec)
-        except ValueError:
-            return _not_found()
-        try:
-            resp = send_file(path, mimetype=rec["mime"].split(";")[0], conditional=True,
-                             as_attachment=download, download_name=name)
-        except FileNotFoundError:
-            return jsonify({"error": "The video file is missing on the hub."}), 410
-        resp.headers["Cache-Control"] = "private, no-store"
-        return resp
+        return routes.video(recording_id)
 
     @bp.route("/api/recordings/<recording_id>/shares", methods=["PUT"])
     @login_required
     def update_shares(recording_id):
-        """Owner only -- the no-re-sharing rule is this check."""
-        rec = _owned_or_404(recording_id)
-        if rec is None:
-            return _not_found()
-        data = request.get_json(silent=True) or {}
-        groups, users = data.get("groups") or [], data.get("users") or []
-        if not isinstance(groups, list) or not isinstance(users, list):
-            return jsonify({"error": "groups and users must be lists"}), 400
-        try:
-            recordings.set_shares(db_path, rec, groups=groups, users=users, actor=_me())
-        except ValueError as e:
-            return refusals.refuse(e)
-        return jsonify(_public(recordings.get(db_path, rec["id"]), owned=True)), 200
+        return routes.update_shares(recording_id)
 
     @bp.route("/api/recordings/<recording_id>", methods=["DELETE"])
     @login_required
     def delete_recording(recording_id):
-        rec = _owned_or_404(recording_id)
-        if rec is None:
-            return _not_found()
-        try:
-            recordings.delete(db_path, root, rec, actor=_me())
-        except ValueError as e:
-            return refusals.refuse(e, 409)
-        _drop_badge(dict(rec, status=recordings.STATUS_ENDED))
-        return jsonify({"status": "deleted"}), 200
+        return routes.delete(recording_id)
 
     return bp
