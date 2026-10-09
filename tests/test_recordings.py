@@ -20,6 +20,7 @@ The silent failures this file exists to catch:
   * **An owner folder that climbs out of the recordings root.** It is built from an email.
 """
 import os
+import sqlite3
 import sys
 import tempfile
 
@@ -85,15 +86,18 @@ def test_create():
     check("...owned by the normalised email", rec["owner"] == "ann@x.com")
     check("one session cannot be recorded twice at once",
           raises(ValueError, new, db))
-    # Two Start requests racing both get past the read; the database must refuse the second.
-    real = recordings.live_for_session
-    recordings.live_for_session = lambda *_a, **_k: []
-    try:
-        raced = raises(ValueError, new, db)
-    finally:
-        recordings.live_for_session = real
-    check("...even when a racing request got past the check",
-          raced and len(recordings.live_for_session(db, "s1")) == 1)
+    # Two Start requests racing both get past create()'s read, so the guarantee has to be the
+    # database's. A second live row for the session is written here the way the losing racer's
+    # INSERT would be, and must be refused; an ended row for the same session must not be.
+    second_live = ("INSERT INTO recordings(id, session_id, machine, owner, reason, status, "
+                   "mime, created_at) VALUES (?, 's1', 'PC-01', 'bob@x.com', 'r', ?, "
+                   "'video/webm', 1)")
+    with recordings.get_conn(db) as conn:
+        refused = raises(sqlite3.IntegrityError, conn.execute, second_live,
+                         ("f" * 32, recordings.STATUS_RECORDING))
+        conn.execute(second_live, ("e" * 32, recordings.STATUS_ENDED))
+    check("...even when a racing request got past the check (the database refuses it)",
+          refused and len(recordings.live_for_session(db, "s1")) == 1)
     audit = fleet.list_audit(db, action="recording_start")["entries"]
     check("the start is audited with who, which PC and why",
           audit and audit[0]["actor"] == "ann@x.com" and audit[0]["target"] == "PC-01"
