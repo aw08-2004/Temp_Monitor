@@ -1286,6 +1286,25 @@
     line-height: 1.5;
 }
 
+/* ============ Recordings page (roadmap #19) ============ */
+/* The player is as wide as the screen allows: it is somebody's desktop, and at the 620px
+   editor width its text is unreadable. */
+.recordings-player {
+    width: min(1100px, 95vw);
+}
+
+.recordings-confirm {
+    width: min(460px, 92vw);
+}
+
+.recordings-share-groups {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    max-height: 30vh;
+    overflow-y: auto;
+}
+
 /* ============ Console surface ============ */
 /* Monospace output pane. Shared by the command panel's inline result view and the
    terminal's scrollback so the two can't drift apart. */

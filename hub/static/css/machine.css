@@ -812,6 +812,32 @@
     flex-shrink: 0;
 }
 
+/* The last minute of a session recording (roadmap #19): a strip under the picture with the
+   countdown and the two answers to it. Danger-tinted, because ignoring it ends the
+   recording. */
+.remote-rec-bar {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    flex-wrap: wrap;
+    margin-top: var(--space-3);
+    padding: var(--space-2) var(--space-3);
+    border: 1px solid var(--danger, #f85149);
+    border-radius: var(--radius-md);
+}
+
+.remote-rec-bar[hidden] { display: none; }
+
+.remote-rec-bar__text {
+    flex: 1;
+    font-size: var(--text-sm);
+}
+
+/* The recording-reason dialog: one question, so not the 620px editor width. */
+.modal--narrow {
+    width: min(460px, 92vw);
+}
+
 .remote-stage {
     position: relative;
     background: #000;

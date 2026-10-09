@@ -139,6 +139,49 @@ public static class RemoteHelper
     /// Run it session-injected (the service does that) to test the real conditions; run it
     /// directly from a console to see what an ordinary user-token process is allowed to observe.
     /// </summary>
+    /// <summary>True if this process was launched as the recording-badge diagnostic.</summary>
+    public static bool IsRecordingBadgeTest(string[] args) =>
+        args.Any(a => string.Equals(a, "--recording-badge-test", StringComparison.Ordinal));
+
+    /// <summary>
+    /// Shows the recording badge without a hub or a session: <c>--recording-badge-test [seconds]</c>.
+    ///
+    /// The badge's whole job is to be seen in places that are awkward to reach from a remote
+    /// session -- the lock screen, the logon screen -- so this puts it up and follows the input
+    /// desktop exactly as a recording does. Run it session-injected (as SYSTEM in the console
+    /// session) and press Win+L to check the lock screen; run it from a console to check the
+    /// look on an ordinary desktop.
+    /// </summary>
+    public static int RunRecordingBadgeTest(string[] args)
+    {
+        int seconds = 20;
+        for (int i = 0; i < args.Length - 1; i++)
+            if (args[i] == "--recording-badge-test" && int.TryParse(args[i + 1], out var s))
+                seconds = s;
+
+        void Say(string msg) =>
+            Console.WriteLine($"[recording-badge-test {DateTime.Now:HH:mm:ss}] {msg}");
+
+        Say(Describe());
+        using var desktops = new InputDesktopWatcher(DesktopPollMs, Say);
+        desktops.Changed += (from, to) => Say($"input desktop {from} -> {to}");
+        desktops.Start();
+        // The watcher's first reading, which the badge compares its own desktop against.
+        for (int waited = 0; desktops.Name.Length == 0 && waited < 3000; waited += 50)
+            Thread.Sleep(50);
+        using var badge = new RecordingBadge(desktops, Say);
+        badge.Failed += (desktop, error) => Say($"FAILED on {desktop}: {error}");
+        string? error = badge.Show("self-test");
+        if (error is not null)
+        {
+            Say("FAILED: " + error);
+            return 1;
+        }
+        Say($"badge up for {seconds}s.");
+        Thread.Sleep(TimeSpan.FromSeconds(seconds));
+        return 0;
+    }
+
     public static int RunDesktopProbe(string[] args)
     {
         int seconds = 60;
@@ -331,6 +374,18 @@ public static class RemoteHelper
                             from.Length == 0 ? "(none)" : from, to);
         desktops.Start();
 
+        // The "Recording Screen" badge (roadmap #19). Created here, beside the watcher it
+        // follows, and disposed before it (declaration order), so no badge window outlives the
+        // session. A desktop it cannot be put on ends the recording at the hub.
+        using var badge = new RecordingBadge(desktops, m => Log.Information("{Msg}", m));
+        badge.Failed += (desktop, error) =>
+        {
+            string? id = badge.RecordingId;
+            if (id is null) return;
+            badge.Hide();
+            ReportBadge(signaling, id, "failed", error, desktop, cts.Token);
+        };
+
         using var inputQueue = new InputQueue(log: m => Log.Warning("{Msg}", m));
         peer.OnControlMessage += msg =>
         {
@@ -423,6 +478,11 @@ public static class RemoteHelper
                 if (sig.Kind == "relay")
                 {
                     if (relay is null) relay = StartRelay();
+                    continue;
+                }
+                if (sig.Kind == "record")
+                {
+                    HandleRecordSignal(sig, badge, signaling, cts.Token);
                     continue;
                 }
                 HandleSignal(peer, sig, cts);
@@ -608,6 +668,59 @@ public static class RemoteHelper
     private static async Task Delay(CancellationToken ct)
     {
         try { await Task.Delay(PollIntervalMs, ct); } catch (OperationCanceledException) { }
+    }
+
+    /// <summary>The hub asking for the recording badge to go up (<c>on: true</c>) or down.
+    ///
+    /// Answered with a <c>recording</c> signal saying what actually happened, because the hub
+    /// stores no video until it hears <c>shown</c> -- a badge this helper only MEANT to show is
+    /// not the one the owner required. Runs off the poll loop: putting a window up can take a
+    /// few seconds on a desktop mid-switch, and the loop also carries the session's ending.</summary>
+    private static void HandleRecordSignal(
+        RemoteSignalingClient.SignalMessage sig, RecordingBadge badge,
+        RemoteSignalingClient signaling, CancellationToken ct)
+    {
+        string? id = sig.Payload.ValueKind == JsonValueKind.Object &&
+                     sig.Payload.TryGetProperty("recording_id", out var r) ? r.GetString() : null;
+        if (string.IsNullOrEmpty(id)) return;
+        bool on = sig.Payload.TryGetProperty("on", out var o) && o.ValueKind == JsonValueKind.True;
+        _ = Task.Run(() =>
+        {
+            if (on)
+            {
+                string? error = badge.Show(id);
+                if (error is not null) badge.Hide();
+                ReportBadge(signaling, id, error is null ? "shown" : "failed", error, null, ct);
+            }
+            else if (badge.RecordingId == id)
+            {
+                badge.Hide();
+                ReportBadge(signaling, id, "hidden", null, null, ct);
+            }
+        }, ct);
+    }
+
+    private static void ReportBadge(RemoteSignalingClient signaling, string recordingId,
+                                    string state, string? error, string? desktop,
+                                    CancellationToken ct)
+    {
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await signaling.PostSignalAsync("recording", new
+                {
+                    recording_id = recordingId,
+                    badge = state,
+                    error,
+                    desktop,
+                }, ct);
+            }
+            catch (Exception e)
+            {
+                Log.Warning("reporting the recording badge ({State}) failed: {Msg}", state, e.Message);
+            }
+        }, ct);
     }
 
     private static void HandleSignal(

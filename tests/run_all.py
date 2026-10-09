@@ -23,6 +23,7 @@ import glob
 import os
 import subprocess
 import sys
+import tempfile
 import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -54,7 +55,11 @@ def main():
                FLASK_SECRET_KEY=os.environ.get("FLASK_SECRET_KEY") or "test-secret-key",
                GOOGLE_CLIENT_ID=os.environ.get("GOOGLE_CLIENT_ID") or "test-client-id",
                GOOGLE_CLIENT_SECRET=os.environ.get("GOOGLE_CLIENT_SECRET") or "test-secret",
-               ALLOWED_EMAILS=os.environ.get("ALLOWED_EMAILS") or "root@example.com")
+               ALLOWED_EMAILS=os.environ.get("ALLOWED_EMAILS") or "root@example.com",
+               # Where app.py keeps session recordings (roadmap #19). It creates and ACL-locks
+               # that folder at import, and the default is `<checkout>/data`.
+               HUB_RECORDINGS_DIR=os.environ.get("HUB_RECORDINGS_DIR")
+               or os.path.join(tempfile.mkdtemp(prefix="hub-test-recordings-"), "data"))
 
     failures = []
     for path in files:

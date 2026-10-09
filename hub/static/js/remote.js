@@ -139,6 +139,18 @@
             vddText: q('vdd-text'),
             vddInstall: q('vdd-install'),
             vddUninstall: q('vdd-uninstall'),
+            record: q('record'),
+            recPill: q('rec-pill'),
+            recPillText: q('rec-pill-text'),
+            recBar: q('rec-bar'),
+            recBarText: q('rec-bar-text'),
+            recExtend: q('rec-extend'),
+            recStop: q('rec-stop'),
+            recDialog: q('rec-dialog'),
+            recReason: q('rec-reason'),
+            recError: q('rec-error'),
+            recConfirm: q('rec-confirm'),
+            recCancel: q('rec-cancel'),
         };
 
         let pc = null;
@@ -172,6 +184,9 @@
             els.status.innerHTML = '<span class="status-pill__dot"></span>';
             els.status.append(text);
             els.overlayStatus.textContent = text;
+            // Recording needs a picture to record, so the button wakes up with "Live" -- and
+            // stays up while a recording runs, because it is also how that recording stops.
+            if (recorder) els.record.disabled = state !== 'ok' && !recorder.isActive();
             if (options.onStatus) options.onStatus(state, text);
         }
 
@@ -186,6 +201,76 @@
         // revealed by renderDisplays, which a borrowed viewer never reaches.
         if (options.borrowed) {
             els.refreshSessions.hidden = true;
+        }
+
+        // ---- Session recording (roadmap #19) ----------------------------------------------
+        // Offered only where it can work and is allowed: never for a borrowed PC (its owning
+        // hub has no recording route for a peer, and the share was not granted for one), and
+        // only in a browser that can record. Everything else is remote-recorder.js.
+        const recorder = (!options.borrowed && window.RemoteRecorder &&
+                          window.RemoteRecorder.supported())
+            ? window.RemoteRecorder.create({
+                machine,
+                sessionId: () => sessionId,
+                stream: () => els.video.srcObject,
+                onState: onRecordingState,
+                onCountdown: onRecordingCountdown,
+            })
+            : null;
+        els.record.hidden = !recorder;
+
+        function clock(seconds) {
+            const total = Math.max(0, Math.floor(seconds));
+            return Math.floor(total / 60) + ':' + String(total % 60).padStart(2, '0');
+        }
+
+        function onRecordingState(state, detail) {
+            const active = state === 'starting' || state === 'recording' || state === 'stopping';
+            els.record.textContent = active ? t('recordings.stop_recording') : t('recordings.record');
+            els.record.classList.toggle('btn--danger', active);
+            els.record.disabled = state === 'stopping' || (!active && !running);
+            els.recPill.hidden = !active;
+            if (state === 'starting') {
+                els.recPillText.textContent = t('recordings.pill_starting');
+                hint(t('recordings.starting'));
+            } else if (state === 'recording') {
+                els.recPillText.textContent = t('recordings.pill', { time: clock(detail.seconds) });
+                if (els.hint.textContent === t('recordings.starting')) hint('');
+            } else if (state === 'ended') {
+                hint(detail.reason && detail.reason !== 'stopped'
+                    ? t('recordings.ended_with_reason',
+                        { reason: window.RemoteRecorder.endReasonText(detail.reason) })
+                    : t('recordings.saved'));
+            } else if (state === 'failed') {
+                hint(t('recordings.failed', { error: detail.error || '' }));
+            }
+            if (!active) els.recBar.hidden = true;
+        }
+
+        function onRecordingCountdown(secondsLeft) {
+            els.recBar.hidden = secondsLeft === null;
+            if (secondsLeft !== null) {
+                els.recBarText.textContent = t('recordings.countdown', { time: clock(secondsLeft) });
+            }
+        }
+
+        function openRecordingDialog() {
+            els.recReason.value = '';
+            els.recError.hidden = true;
+            els.recDialog.showModal();
+            els.recReason.focus();
+        }
+
+        function confirmRecording() {
+            const reason = els.recReason.value.trim();
+            if (!reason) {
+                els.recError.textContent = t('recordings.reason_required');
+                els.recError.hidden = false;
+                els.recReason.focus();
+                return;
+            }
+            els.recDialog.close();
+            recorder.start(reason);
         }
 
         // ---- Start-time settings ---------------------------------------------------------
@@ -577,12 +662,18 @@
 
         async function stop() {
             const id = sessionId;
+            // A recording is flushed BEFORE the session goes: once the session has ended, the
+            // hub ends the recording with it and refuses the chunk still in the browser.
+            if (recorder && recorder.isActive()) await recorder.stop('stopped');
             teardown('muted');
             await stopSession(id);
         }
 
         function teardown(statusKind) {
             running = false;
+            // Any other way the session ends (the PC, the hub, an expired TTL) ends the
+            // recording at the hub too; this only stops the recorder feeding a dead stream.
+            if (recorder && recorder.isActive()) recorder.stop('stopped');
             if (pollTimer) { clearTimeout(pollTimer); pollTimer = null; }
             clearRelayTimer();
             if (relay) { relay.stop(); relay = null; }
@@ -860,8 +951,11 @@
             if (disposed) return;
             disposed = true;
             const id = sessionId;
+            // Same order as stop(): the recording's last chunk first, then the session.
+            const flushed = recorder && recorder.isActive()
+                ? recorder.stop('stopped') : Promise.resolve();
+            flushed.finally(() => stopSession(id));
             teardown('muted');
-            stopSession(id);
             document.removeEventListener('fullscreenchange', onFullscreenChange);
             window.removeEventListener('pagehide', onPageHide);
             window.removeEventListener('pageshow', onPageShow);
@@ -880,6 +974,19 @@
         els.exitFullscreen.addEventListener('click', toggleFullscreen);
         els.vddInstall.addEventListener('click', () => virtualDisplay('install'));
         els.vddUninstall.addEventListener('click', () => virtualDisplay('uninstall'));
+        if (recorder) {
+            els.record.addEventListener('click', () => {
+                if (recorder.isActive()) recorder.stop('stopped');
+                else openRecordingDialog();
+            });
+            els.recConfirm.addEventListener('click', confirmRecording);
+            els.recCancel.addEventListener('click', () => els.recDialog.close());
+            els.recReason.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) confirmRecording();
+            });
+            els.recExtend.addEventListener('click', () => recorder.extend());
+            els.recStop.addEventListener('click', () => recorder.stop('stopped'));
+        }
 
         els.preset.addEventListener('change', () => { syncPresetFields(); sendConfig(); });
         [els.monitor, els.fps, els.bitrate, els.scale].forEach((el) => {

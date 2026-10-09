@@ -24,7 +24,8 @@ public static class ConsentBanner
     private const int DefaultTimeoutSeconds = 30;
 
     // Visual styles and DPI mode are process-wide and must be set before the first window
-    // exists, so they happen once, lazily, on whichever consent prompt comes first.
+    // exists, so they happen once, lazily, on whichever window comes first -- a consent prompt
+    // or the recording badge (RecordingBadge), which is why InitialiseUi is internal.
     private static int _uiInitialised;
 
     /// <summary>Show the prompt on a dedicated thread and await the answer. Always use this
@@ -73,7 +74,7 @@ public static class ConsentBanner
         }
     }
 
-    private static void InitialiseUi()
+    internal static void InitialiseUi()
     {
         if (Interlocked.Exchange(ref _uiInitialised, 1) != 0) return;
         Application.EnableVisualStyles();

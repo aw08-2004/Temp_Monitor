@@ -38,6 +38,8 @@ if (RemoteHelper.TryGetCaptureTestArgs(args) is { } captureTestArgs)
 // working, so it gets a way to be tested on its own before a full session is involved.
 if (RemoteHelper.IsDesktopProbe(args))
     return RemoteHelper.RunDesktopProbe(args);
+if (RemoteHelper.IsRecordingBadgeTest(args))
+    return RemoteHelper.RunRecordingBadgeTest(args);
 
 // Rotating file log under %ProgramData% so field issues on client machines are
 // diagnosable. Console sink too,

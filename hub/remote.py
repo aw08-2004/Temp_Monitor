@@ -38,6 +38,7 @@ import uuid
 
 import envfile
 import fleet
+import recordings
 import remote_relay
 
 # ================================
@@ -68,7 +69,12 @@ _SENDERS = frozenset({SENDER_AGENT, SENDER_CONSOLE})
 # relay is the console asking the agent to give up on WebRTC and carry the session through the
 # hub instead (remote_relay.py) -- a signal rather than a new route because the agent already
 # polls this channel, and an agent too old to know the kind simply ignores it.
-SIGNAL_KINDS = frozenset({"offer", "answer", "ice", "bye", "relay"})
+# record / recording are the session recording's badge (recordings.py, roadmap #19): the hub
+# asks the helper to raise or drop its "Recording Screen" badge, and the helper answers with
+# what it actually did. They ride this channel for the relay's reason, and the old-agent case
+# matters more here: an agent that ignores `record` never answers, so its recording fails
+# rather than running with no badge on the screen.
+SIGNAL_KINDS = frozenset({"offer", "answer", "ice", "bye", "relay", "record", "recording"})
 
 
 def get_conn(db_path):
@@ -139,6 +145,10 @@ def init_remote_db(db_path):
             )
             """
         )
+    # The recordings that ride a session's signaling (roadmap #19). Created with the session
+    # tables because remote_web reads them on every agent offer -- anything that can create a
+    # session can then also end its recordings, without a second init call to forget.
+    recordings.init_recordings_db(db_path)
 
 
 # --------------------------------------------------------------------------- inventory

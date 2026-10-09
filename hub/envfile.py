@@ -54,6 +54,26 @@ def protect(env_path):
     Fails soft -- a hub that cannot re-ACL its own config must still start, or this turns an
     exposure into an outage. The caller logs what comes back.
     """
+    return _restrict(env_path, container=False)
+
+
+def protect_directory(path):
+    """protect(), for a DIRECTORY whose contents must be as private as `.env` is.
+
+    Written for the session recordings (roadmap #19), which are video of people's screens and
+    live under STATE_ROOT for the same reason `.env` does -- so they inherit the same
+    `BUILTIN\\Users` read grant from C:\\Program Files. The only difference from a file is
+    that the allowed entries carry OBJECT_INHERIT | CONTAINER_INHERIT, so every recording
+    written into the folder later is born private rather than needing its own call.
+    """
+    return _restrict(path, container=True)
+
+
+# OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE: files and subfolders created later inherit it.
+_OBJECT_AND_CONTAINER_INHERIT = 0x1 | 0x2
+
+
+def _restrict(env_path, container):
     if sys.platform != "win32" or not env_path or not os.path.exists(env_path):
         return None
     try:
@@ -110,8 +130,13 @@ def protect(env_path):
 
         replacement = win32security.ACL()
         for sid in wanted:
-            replacement.AddAccessAllowedAce(
-                win32security.ACL_REVISION, ntsecuritycon.FILE_ALL_ACCESS, sid)
+            if container:
+                replacement.AddAccessAllowedAceEx(
+                    win32security.ACL_REVISION_DS, _OBJECT_AND_CONTAINER_INHERIT,
+                    ntsecuritycon.FILE_ALL_ACCESS, sid)
+            else:
+                replacement.AddAccessAllowedAce(
+                    win32security.ACL_REVISION, ntsecuritycon.FILE_ALL_ACCESS, sid)
         # PROTECTED_DACL_SECURITY_INFORMATION is what drops the inherited ACEs and keeps them
         # dropped. Without it the Users read grant comes straight back and this achieves
         # nothing.

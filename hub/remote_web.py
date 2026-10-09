@@ -28,6 +28,7 @@ import auth_helpers
 import fleet
 import permissions
 import permissions_web
+import recordings
 import refusals
 import remote
 import remote_relay
@@ -161,6 +162,18 @@ def create_remote_blueprint(db_path, login_required, access, env_path=None):
         # console UI can show "connecting" rather than a stuck "pending".
         if kind == "offer":
             remote.mark_status(db_path, session_id, remote.STATUS_CONNECTING)
+            # An offer is a NEW helper, and a new helper has no badge up: the one that had it
+            # was relaunched (a sign-in, a sign-out) or died. So a recording running through
+            # the old one ends here -- the "it stops if the helper dies" half of roadmap #19.
+            # The session's first offer finds nothing to end, since nothing records before
+            # the picture arrives.
+            recordings.end_for_session(db_path, session_id, recordings.END_HELPER_RESTARTED,
+                                       actor=machine)
+        elif kind == "recording":
+            # The helper's answer to a `record` signal: whether the badge is on screen.
+            payload = data.get("payload") if isinstance(data.get("payload"), dict) else {}
+            recordings.confirm_badge(db_path, str(payload.get("recording_id") or ""),
+                                     machine, str(payload.get("badge") or ""))
         try:
             seq = remote.add_signal(db_path, session_id, remote.SENDER_AGENT, kind,
                                     data.get("payload"))
@@ -203,6 +216,8 @@ def create_remote_blueprint(db_path, login_required, access, env_path=None):
         data = request.get_json(silent=True) or {}
         reason = str(data.get("reason") or "agent ended")[:200]
         remote.end_session(db_path, session_id, reason, actor=machine)
+        recordings.end_for_session(db_path, session_id, recordings.END_SESSION_ENDED,
+                                   actor=machine)
         return jsonify({"status": "ended"}), 200
 
     @bp.route("/api/agent/remote/<session_id>/poll", methods=["GET"])
@@ -507,6 +522,8 @@ def create_remote_blueprint(db_path, login_required, access, env_path=None):
     @scoped_session
     def stop_session(session_id, sess):
         remote.end_session(db_path, session_id, "operator stopped", actor=_current_email())
+        recordings.end_for_session(db_path, session_id, recordings.END_SESSION_ENDED,
+                                   actor=_current_email())
         return jsonify({"status": "ended"}), 200
 
     @bp.route("/api/remote/sessions", methods=["GET"])
