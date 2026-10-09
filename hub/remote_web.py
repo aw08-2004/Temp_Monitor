@@ -20,8 +20,9 @@ it. Do not add force=True and do not accept a form-encoded fallback.
 """
 import functools
 import os
+import time
 
-from flask import Blueprint, jsonify, request, session
+from flask import Blueprint, Response, jsonify, request, session
 
 import auth_helpers
 import fleet
@@ -29,6 +30,7 @@ import permissions
 import permissions_web
 import refusals
 import remote
+import remote_relay
 import settings
 # For the peer plane's gate only (roadmap #15). sharing_web does not import this module
 # at load time -- its one use of remote.py is a deferred import inside a function -- so this
@@ -38,6 +40,9 @@ import sharing_web
 # The .env variable holding the TURN shared secret. Read from the environment (load_dotenv ran
 # at hub startup), never from the settings table -- secrets are structurally barred from there.
 TURN_SECRET_ENV = "REMOTE_TURN_SECRET"
+
+# The refusal for relay traffic on a session that has ended or expired.
+SESSION_NOT_ACTIVE = "session is not active"
 
 # Backwards-compatible alias so callers using the old private name keep working.
 _bearer_agent = auth_helpers.bearer_agent
@@ -214,6 +219,80 @@ def create_remote_blueprint(db_path, login_required, access, env_path=None):
         result["status"] = sess["status"]
         return jsonify(result), 200
 
+    # ---------------- Hub relay (remote_relay.py) ----------------
+    # The fallback path for a session WebRTC could not connect. Same two planes as the
+    # signaling above -- the agent by bearer token on its own machine's session, the console by
+    # remote_control + scope -- and the relay only exists once the CONSOLE asked for it (the
+    # `relay` signal in console_signal), so an agent cannot push video into a session nobody
+    # switched over.
+    def _relay_session_live(sess):
+        """True while the session may still carry relay traffic. A session that ended or
+        expired has its relay closed here as well as in remote.end_session, because the TTL
+        sweep and a racing request can each get there first."""
+        if sess is None:
+            return False
+        if sess["status"] in (remote.STATUS_PENDING, remote.STATUS_CONNECTING,
+                              remote.STATUS_ACTIVE) and sess["expires_at"] > time.time():
+            return True
+        remote_relay.close_relay(sess["id"])
+        return False
+
+    @bp.route("/api/agent/remote/<session_id>/relay/down", methods=["POST"])
+    @agent_auth
+    def agent_relay_down(agent_id, machine, session_id):
+        """Encoded frames and status records from the agent, in remote_relay's framing. The
+        body is read raw: it is binary, and bearer auth (not a browser cookie) is what makes this
+        route safe from a cross-site POST, so the JSON content-type rule does not apply."""
+        sess = _agent_session_or_404(session_id, machine)
+        if sess is None:
+            return jsonify({"error": "unknown session"}), 404
+        if not _relay_session_live(sess):
+            return jsonify({"error": SESSION_NOT_ACTIVE}), 409
+        body = _read_capped(remote_relay.MAX_UPLOAD_BYTES)
+        if body is None:
+            return jsonify({"error": "upload too large"}), 413
+        try:
+            records = remote_relay.parse_records(body)
+        except ValueError as e:
+            return refusals.refuse(e)
+        if remote_relay.push_down(session_id, records) is None:
+            return jsonify({"error": "relay is not open for this session"}), 409
+        return jsonify({"stored": len(records)}), 200
+
+    def _read_capped(limit):
+        """The request body, or None if it is longer than `limit` -- read without ever holding
+        more than `limit + 1` bytes.
+
+        The Content-Length check alone is not a bound: a chunked POST has no Content-Length,
+        and request.get_data() would buffer the whole body before parse_records ever saw it.
+        This is the one route that takes a raw binary body, and the hub sets no
+        MAX_CONTENT_LENGTH, so the cap has to be enforced here, on the stream (found in review
+        of #115)."""
+        if (request.content_length or 0) > limit:
+            return None
+        chunks, size = [], 0
+        while size <= limit:
+            chunk = request.stream.read(min(64 * 1024, limit + 1 - size))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            size += len(chunk)
+        return None if size > limit else b"".join(chunks)
+
+    @bp.route("/api/agent/remote/<session_id>/relay/up", methods=["GET"])
+    @agent_auth
+    def agent_relay_up(agent_id, machine, session_id):
+        """Long-poll for the console's input and live-settings messages -- the relayed copy of
+        what the WebRTC control channel would have carried, as the same JSON strings."""
+        sess = _agent_session_or_404(session_id, machine)
+        if sess is None:
+            return jsonify({"error": "unknown session"}), 404
+        if not _relay_session_live(sess):
+            return jsonify({"messages": [], "next": 0, "state": "closed"}), 200
+        messages, cursor, state = remote_relay.read_up(
+            session_id, request.args.get("after", 0))
+        return jsonify({"messages": messages, "next": cursor, "state": state}), 200
+
     # ---------------- Console-facing (session + remote_control + scope) ----------------
     def scoped_session(view):
         """Resolve a /api/remote/session/<id> route's session and confirm the caller can reach
@@ -315,16 +394,55 @@ def create_remote_blueprint(db_path, login_required, access, env_path=None):
     @scoped_session
     def console_signal(session_id, sess):
         data = request.get_json(silent=True) or {}
+        relay_created = False
+        if data.get("kind") == "relay":
+            refused, relay_created = _open_relay(session_id, sess)
+            if refused is not None:
+                return refused
         try:
             seq = remote.add_signal(db_path, session_id, remote.SENDER_CONSOLE,
                                     data.get("kind"), data.get("payload"))
-        except KeyError:
-            return jsonify({"error": "unknown session"}), 404
-        except PermissionError as e:
-            return refusals.refuse(e, 409)
-        except ValueError as e:
+        except (KeyError, PermissionError, ValueError) as e:
+            # A relay this request opened for a signal the agent will now never hear would sit
+            # open, unused, until the idle sweep. Close it; a retry opens it again.
+            if relay_created:
+                remote_relay.close_relay(session_id)
+            if isinstance(e, KeyError):
+                return jsonify({"error": "unknown session"}), 404
+            if isinstance(e, PermissionError):
+                return refusals.refuse(e, 409)
             return refusals.refuse(e)
+        if relay_created:
+            # Audited only once the switch is real -- the signal is queued, so the agent will
+            # act on it -- and only by the request that created the relay, so a console that
+            # retries a timed-out request, or two retries racing, write one row between them.
+            # From here on the hub sees the picture in the clear (remote_relay's docstring).
+            payload = data.get("payload")
+            reason = payload.get("reason") if isinstance(payload, dict) else ""
+            fleet.audit(db_path, actor=_current_email(), action="remote_session_relay",
+                        level=fleet.LEVEL_SECURITY, target=sess["machine"],
+                        detail={"session_id": session_id, "reason": str(reason or "")[:120]})
         return jsonify({"seq": seq}), 200
+
+    def _open_relay(session_id, sess):
+        """Open the relay for a console's `relay` signal. Returns (refusal, created): a refusal
+        response or None, and whether THIS call created the relay.
+
+        Opened BEFORE the signal is queued, not after, and that order is deliberate. The other
+        way round, the agent can poll the signal, switch, and upload before the relay exists --
+        and an agent that is refused an upload ends the session, which would turn the fallback
+        into the failure. The cost of this order, a relay open for a signal that then failed, is
+        undone by the caller (it closes what it created).
+
+        Refused outright when the fallback is switched off: the agent would otherwise drop its
+        peer for a path that answers 409."""
+        if not settings.get_bool(db_path, "remote.relay_fallback"):
+            return (jsonify({"error": "Relaying through the hub is turned off in Settings."}),
+                    403), False
+        if not _relay_session_live(sess):
+            return (jsonify({"error": SESSION_NOT_ACTIVE}), 409), False
+        _, created = remote_relay.open_relay(session_id, sess["machine"])
+        return None, created
 
     @bp.route("/api/remote/session/<session_id>/poll", methods=["GET"])
     @login_required
@@ -338,6 +456,50 @@ def create_remote_blueprint(db_path, login_required, access, env_path=None):
         result = remote.get_signals(db_path, session_id, remote.SENDER_CONSOLE, after_seq)
         result["status"] = remote.get_session(db_path, session_id)["status"]
         return jsonify(result), 200
+
+    @bp.route("/api/remote/session/<session_id>/relay/down", methods=["GET"])
+    @login_required
+    @can_remote
+    @scoped_session
+    def console_relay_down(session_id, sess):
+        """Long-poll the agent's frames. Binary, in remote_relay's framing; the cursor and the
+        relay's state ride in headers so the body stays the frames and nothing else."""
+        if not _relay_session_live(sess):
+            records, cursor, state = [], 0, "closed"
+        else:
+            records, cursor, state = remote_relay.read_down(
+                session_id, request.args.get("after", 0))
+        resp = Response(remote_relay.frame_records(records),
+                        mimetype="application/octet-stream")
+        resp.headers["X-Relay-Next"] = str(cursor)
+        resp.headers["X-Relay-State"] = state
+        resp.headers["Cache-Control"] = "no-store"
+        return resp
+
+    @bp.route("/api/remote/session/<session_id>/relay/up", methods=["POST"])
+    @login_required
+    @can_remote
+    @scoped_session
+    def console_relay_up(session_id, sess):
+        """Input and live-settings messages for the agent. JSON body, for the CSRF reason in
+        this module's docstring."""
+        if not _relay_session_live(sess):
+            return jsonify({"error": SESSION_NOT_ACTIVE}), 409
+        data = request.get_json(silent=True) or {}
+        messages = data.get("messages")
+        if not isinstance(messages, list) or len(messages) > 200:
+            return jsonify({"error": "messages must be a list of at most 200"}), 400
+        try:
+            queued = remote_relay.push_up(session_id, messages)
+        except remote_relay.RelayBacklogFull:
+            # The agent stopped reading. 429 rather than a silent drop; the viewer retries,
+            # and a session whose agent is gone ends through the down stream's state.
+            return jsonify({"error": "The machine is not keeping up with input."}), 429
+        except ValueError as e:
+            return refusals.refuse(e)
+        if queued is None:
+            return jsonify({"error": "relay is not open for this session"}), 409
+        return jsonify({"queued": queued}), 200
 
     @bp.route("/api/remote/session/<session_id>/stop", methods=["POST"])
     @login_required
@@ -458,6 +620,13 @@ def create_remote_blueprint(db_path, login_required, access, env_path=None):
     @peer_session
     def peer_signal(peer, state, sess):
         data = request.get_json(silent=True) or {}
+        if data.get("kind") == "relay":
+            # No relay for a borrowed machine: its frames would cross this hub AND the
+            # borrowing one, and the share was granted for a session whose media goes peer to
+            # peer. Refused here rather than queued for the agent, which would otherwise drop a
+            # peer for a relay nobody opened.
+            return jsonify({"error": "Relaying through the hub is not available for a shared "
+                                     "machine."}), 403
         try:
             seq = remote.add_signal(db_path, sess["id"], remote.SENDER_CONSOLE,
                                     data.get("kind"), data.get("payload"))

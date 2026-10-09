@@ -38,6 +38,7 @@ def fake_login_required(view):
 
 
 def main():
+    global CURRENT_USER
     db_fd, db_path = tempfile.mkstemp(suffix=".db")
     os.close(db_fd)
     try:
@@ -91,6 +92,9 @@ def main():
               any(cmd["type"] == "start_remote_session" and cmd["params"]["session_id"] == sid
                   for cmd in fleet.claim_commands(db_path, agent_id, "PC-01")))
         check("session is pending", remote.get_session(db_path, sid)["status"] == remote.STATUS_PENDING)
+
+        r = c.post("/api/remote/PC-09/start", json={})
+        pc09_relay_sid = r.get_json()["session_id"]
 
         print("\n== Signaling relay through the endpoints ==")
         # Agent posts its offer; the console poll should receive it and the status flips.
@@ -159,6 +163,127 @@ def main():
         r = c.post(f"/api/agent/remote/{agent_end_sid}/ended", json={}, headers=other_auth)
         check("a foreign agent cannot end this session -> 404", r.status_code == 404)
 
+        print("\n== Hub relay fallback ==")
+        import remote_relay
+        frames = remote_relay.frame_records([
+            (remote_relay.KIND_CONTROL, 0, b'{"t":"geom","w":1280,"h":720}'),
+            (remote_relay.KIND_VIDEO, remote_relay.FLAG_KEYFRAME, b"\x00\x00\x01\x65IDR"),
+        ])
+        octet = dict(auth, **{"Content-Type": "application/octet-stream"})
+        r = c.post(f"/api/agent/remote/{sid}/relay/down", data=frames, headers=octet)
+        check("an agent cannot push frames before the console asked for the relay -> 409",
+              r.status_code == 409)
+
+        settings.set_many(db_path, {"remote.relay_fallback": False})
+        settings.invalidate()
+        r = c.post(f"/api/remote/session/{sid}/signal",
+                   json={"kind": "relay", "payload": {"reason": "failed"}})
+        check("the relay is refused when the fallback is switched off -> 403",
+              r.status_code == 403)
+        check("and nothing was opened", remote_relay.get_relay(sid) is None)
+        settings.set_many(db_path, {"remote.relay_fallback": True})
+        settings.invalidate()
+
+        def relay_audit_rows():
+            return fleet.list_audit(db_path, action="remote_session_relay")["entries"]
+
+        before = len(relay_audit_rows())
+        # A relay signal the hub then refuses to queue (here: a payload over the signal cap).
+        # The agent will never hear it, so nothing may be left behind: no open relay, and no
+        # audit row claiming a switch that did not happen.
+        r = c.post(f"/api/remote/session/{sid}/signal",
+                   json={"kind": "relay", "payload": {"reason": "x" * (70 * 1024)}})
+        check("a relay signal that cannot be queued is refused -> 400", r.status_code == 400)
+        check("and closes the relay it opened", remote_relay.get_relay(sid) is None)
+        check("and writes no audit row", len(relay_audit_rows()) == before)
+
+        r = c.post(f"/api/remote/session/{sid}/signal",
+                   json={"kind": "relay", "payload": {"reason": "failed"}})
+        check("the console asks for the relay -> 200", r.status_code == 200)
+        r = c.post(f"/api/remote/session/{sid}/signal",
+                   json={"kind": "relay", "payload": {"reason": "failed"}})
+        relay_rows = relay_audit_rows()
+        check("the switch is audited exactly once, however often the console retries",
+              len(relay_rows) == before + 1)
+        r = c.get(f"/api/agent/remote/{sid}/poll?after_seq=0", headers=auth)
+        check("the agent hears about it on its ordinary signaling poll",
+              any(sig["kind"] == "relay" for sig in r.get_json()["signals"]))
+
+        r = c.post(f"/api/agent/remote/{sid}/relay/down", data=frames, headers=octet)
+        check("the agent pushes frames -> 200", r.status_code == 200)
+        r = c.post(f"/api/agent/remote/{sid}/relay/down", data=frames, headers=dict(
+            other_auth, **{"Content-Type": "application/octet-stream"}))
+        check("a foreign agent cannot push into this session -> 404", r.status_code == 404)
+        r = c.post(f"/api/agent/remote/{sid}/relay/down", data=b"\x01\x00\x00\x00\x00\x09x",
+                   headers=octet)
+        check("a malformed upload is refused -> 400", r.status_code == 400)
+
+        # The size cap, with and without a Content-Length. A chunked POST has none, and the
+        # first version checked only the header -- so a chunked body was buffered whole before
+        # anything looked at its size (found in review of #115). The cap is lowered for the
+        # test rather than sending 16 MB.
+        import io
+        saved_cap = remote_relay.MAX_UPLOAD_BYTES
+        remote_relay.MAX_UPLOAD_BYTES = len(frames) + 4
+        try:
+            big = frames * 2
+            r = c.post(f"/api/agent/remote/{sid}/relay/down", data=big, headers=octet)
+            check("an upload over the cap with a Content-Length -> 413", r.status_code == 413)
+
+            def chunked(body):
+                # No CONTENT_LENGTH, and wsgi.input_terminated set the way waitress sets it for
+                # a chunked request -- which is what makes Werkzeug read the stream at all.
+                return c.post(f"/api/agent/remote/{sid}/relay/down", headers=auth,
+                              input_stream=io.BytesIO(body),
+                              content_type="application/octet-stream",
+                              environ_overrides={"wsgi.input_terminated": True})
+            r = chunked(big)
+            check("the same upload chunked, with no Content-Length -> 413", r.status_code == 413)
+            r = chunked(frames)
+            check("a chunked upload under the cap is still taken -> 200", r.status_code == 200)
+        finally:
+            remote_relay.MAX_UPLOAD_BYTES = saved_cap
+
+        r = c.get(f"/api/remote/session/{sid}/relay/down?after=0")
+        check("the console reads the frames back -> 200 binary",
+              r.status_code == 200 and r.mimetype == "application/octet-stream")
+        got = remote_relay.parse_records(r.get_data())
+        check("starting with the geometry, then the keyframe",
+              [k for k, _, _ in got] == [remote_relay.KIND_CONTROL, remote_relay.KIND_VIDEO])
+        check("the cursor and state ride in headers",
+              r.headers.get("X-Relay-State") == "open"
+              and int(r.headers.get("X-Relay-Next")) >= 2)
+
+        r = c.post(f"/api/remote/session/{sid}/relay/up",
+                   json={"messages": [{"t": "m", "x": 0.25, "y": 0.75}, {"t": "cad"}]})
+        check("the console sends input -> 200", r.status_code == 200)
+        r = c.post(f"/api/remote/session/{sid}/relay/up", data="messages=1",
+                   content_type="application/x-www-form-urlencoded")
+        check("input must be JSON (the CSRF rule) -> 400", r.status_code == 400)
+        r = c.get(f"/api/agent/remote/{sid}/relay/up?after=0", headers=auth)
+        up = r.get_json()
+        check("the agent receives the input as DataChannel-shaped JSON strings",
+              up["messages"] == ['{"t":"m","x":0.25,"y":0.75}', '{"t":"cad"}']
+              and up["state"] == "open")
+        r = c.get(f"/api/agent/remote/{sid}/relay/up?after=0", headers=other_auth)
+        check("a foreign agent cannot read this session's input -> 404", r.status_code == 404)
+
+        # An agent that stopped reading: input is refused with 429, never silently dropped.
+        saved_up = remote_relay.MAX_UP_MESSAGES
+        remote_relay.MAX_UP_MESSAGES = 2
+        try:
+            r = c.post(f"/api/remote/session/{sid}/relay/up",
+                       json={"messages": [{"t": "m"}, {"t": "m"}, {"t": "m"}]})
+            check("input past an unread backlog -> 429", r.status_code == 429)
+        finally:
+            remote_relay.MAX_UP_MESSAGES = saved_up
+
+        CURRENT_USER = "tech@x.com"
+        r = c.get(f"/api/remote/session/{pc09_relay_sid}/relay/down?after=0")
+        check("an out-of-scope operator cannot read another machine's frames -> 404",
+              r.status_code == 404)
+        CURRENT_USER = "super@x.com"
+
         print("\n== Stop ==")
         r = c.post(f"/api/remote/session/{sid}/stop")
         check("stop -> 200", r.status_code == 200)
@@ -166,9 +291,14 @@ def main():
         r = c.post(f"/api/agent/remote/{sid}/signal",
                    json={"kind": "ice", "payload": {"c": "late"}}, headers=auth)
         check("signaling on an ended session -> 409", r.status_code == 409)
+        check("stopping the session closed its relay", remote_relay.get_relay(sid) is None)
+        r = c.post(f"/api/agent/remote/{sid}/relay/down", data=frames, headers=octet)
+        check("frames for an ended session are refused -> 409", r.status_code == 409)
+        r = c.get(f"/api/remote/session/{sid}/relay/down?after=0")
+        check("and the console's long-poll answers closed at once",
+              r.headers.get("X-Relay-State") == "closed")
 
         print("\n== Authorization: capability + scope ==")
-        global CURRENT_USER
         CURRENT_USER = "viewer@x.com"     # has view, NOT remote_control
         r = c.post("/api/remote/PC-01/start", json={})
         check("no remote_control -> 403", r.status_code == 403)

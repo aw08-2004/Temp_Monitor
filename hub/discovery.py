@@ -52,6 +52,7 @@ import time
 import uuid
 
 import fleet
+import oui
 import wake
 
 # ================================
@@ -289,12 +290,17 @@ def scan_hosts(db_path, scan_id):
     hosts = []
     for row in rows:
         classification, owner = classify(row["mac"], scan["machine"], index)
+        # Looked up on read, like the classification, rather than stored with the scan: a
+        # refreshed vendor table then names devices in sweeps that ran before it (oui.py).
+        maker = oui.lookup(row["mac"])
         hosts.append({
             "ip": row["ip"],
             "mac": row["mac"],
             "hostname": row["hostname"],
             "classification": classification,
             "machine": owner,
+            "vendor": maker["vendor"],
+            "private_mac": maker["private"],
         })
     hosts.sort(key=lambda h: _sort_key(h["ip"]))
     return hosts

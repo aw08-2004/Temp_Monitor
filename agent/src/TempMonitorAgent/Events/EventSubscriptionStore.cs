@@ -54,6 +54,17 @@ public static class EventSubscriptionStore
         get { lock (Gate) return _subscriptions; }
     }
 
+    /// <summary>The version and the subscriptions it names, read under ONE lock.
+    ///
+    /// A scan that read <see cref="Current"/> and then <see cref="Version"/> could straddle an
+    /// <see cref="Apply"/> and report the new version for records it filtered with the old
+    /// subscriptions. The report's version is what the hub trusts per-id counts on (roadmap #17),
+    /// so the two must come from the same moment.</summary>
+    public static (string Version, IReadOnlyList<Subscription> Subscriptions) Snapshot
+    {
+        get { lock (Gate) return (_version, _subscriptions); }
+    }
+
     /// <summary>The hub's cap on how many records one report may carry. Held here rather
     /// than compiled in so the hub can lower it fleet-wide without an agent release; the hub
     /// caps again on ingest regardless, because this is a courtesy and not a boundary.</summary>

@@ -1462,6 +1462,19 @@ the operator's scope; every session start/stop is in the audit log.
   and authenticated against the relay, which rules out reachability, the shared secret and the
   credential scheme in one stroke. Always confirm with a machine on a genuinely different
   network — a LAN test succeeds on host candidates alone and proves nothing about TURN.
+- **When WebRTC cannot connect at all, the session falls back to the hub** (hub 1.141.0 +
+  agent 3.42.0). If the connection fails — or has not connected twenty seconds after the
+  agent's offer — the viewer asks the hub to carry the session instead: the agent POSTs its
+  already-encoded frames to the hub over the HTTPS it reports on, the browser long-polls them
+  back and decodes them itself (WebCodecs), and input goes the other way. The status pill reads
+  **Live (via hub)**. It is a fallback, not a mode: it costs hub bandwidth (every frame passes
+  through twice), adds a round trip of delay, and the hub sees the picture rather than
+  encrypted media, so every switch writes a `remote_session_relay` row to the audit log. Turn it
+  off with **Settings → Remote Control → Fall back to relaying through the hub**, and a session
+  that cannot connect directly then fails as before. Not offered for a machine borrowed from
+  another hub, nor by an agent older than 3.42.0 (it does not say it can relay, so the viewer
+  never asks). A dead relay is still worth fixing — the fallback is slower — and the diagnosis
+  above is unchanged; `remote-helper.log` now also says when and why a session switched.
 
 - **Diagnosing capture before you involve a browser.** Two agent-binary self-tests, both
   runnable on the machine itself: `--desktop-probe [seconds]` prints the input desktop as it
@@ -1683,6 +1696,13 @@ Every address that answers is classified against the adapters the fleet has repo
 | **This PC** | The machine doing the looking. Not a finding, and kept out of the counts so a quiet VLAN does not read as having found a PC. |
 | **Managed** | A MAC the hub already knows, named with the machine it belongs to. |
 | **Not managed** | Everything else. Deliberately not called *rogue* -- most of it is a printer, an access point or a phone, and a console that calls the accounting department's label printer rogue teaches people to ignore the column. |
+
+Under each MAC the card names **the maker of the network card**, from a snapshot of the IEEE
+registry committed with the hub (`hub/data/oui.tsv.gz`; rebuild it with
+`python tools/refresh_oui.py` when a new vendor's devices show no name). Mostly that is what
+tells a printer from a laptop. An address the device made up itself — every current phone and
+Windows' "random hardware addresses" do this on Wi-Fi — is labelled **Private address** rather
+than looked up, because no registry entry can be its maker.
 
 The verdict is worked out **when the list is read**, not when it was collected, so a machine
 enrolled an hour after a sweep turns that scan's unknown device into itself, and a machine

@@ -155,7 +155,7 @@ if _env_acl_note:
 # ================================
 # Bump on every push to main and restart the hub service -- shown in the
 # dashboard header so a stale/un-restarted deployment is obvious at a glance.
-HUB_VERSION = "1.140.2"
+HUB_VERSION = "1.141.0"
 CHECK_INTERVAL = 5
 SPIKE_THRESHOLD = 10
 LHM_URL = "http://localhost:8085/data.json"
@@ -5026,17 +5026,7 @@ try:
     seed_high_temp_rule()
 except Exception as e:
     print(f"[migrate] High-temperature rule seed failed: {e}")
-start_agent_version_watcher()
-start_hub_update_watcher()
-start_retention_pruner()
-start_deploy_scheduler()
-start_firmware_scheduler()
-start_patch_scheduler()
-start_wake_scheduler()
-start_backup_scheduler()
-start_sweep_worker()
-start_directory_sync_scheduler()
-start_rule_evaluator()
+# The background threads are started at the END of this module, not here -- see START.
 
 # ================================
 # LOCAL TEMP READ & LOGGING THREAD
@@ -6703,6 +6693,28 @@ def machine_page(machine):
 # ================================
 # START
 # ================================
+# The background threads start here, after every function in this module exists, and not
+# beside the init_* calls above where they used to. Each one runs its first pass the moment it
+# starts, on its own thread, while this module is still being imported -- and anything defined
+# below the point it was started is a NameError on that first pass. The rule evaluator hit
+# exactly that on every hub start: resolve_rule_vars calls _recent_sensors_for, defined about
+# six hundred lines further down, so the first evaluation after each restart logged
+# "name '_recent_sensors_for' is not defined" for every rule over machine data and treated the
+# whole pass as failed (seen in the deployed hub's log, 2026-10-08). Starting them last makes
+# the order of definitions in this file irrelevant to them, which a sleep before the first
+# pass would not -- it would only move the race.
+start_agent_version_watcher()
+start_hub_update_watcher()
+start_retention_pruner()
+start_deploy_scheduler()
+start_firmware_scheduler()
+start_patch_scheduler()
+start_wake_scheduler()
+start_backup_scheduler()
+start_sweep_worker()
+start_directory_sync_scheduler()
+start_rule_evaluator()
+
 application = app
 
 if __name__ == "__main__":

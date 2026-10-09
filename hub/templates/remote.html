@@ -64,6 +64,9 @@
    #machine-config here, so FleetApi.machine is null -- which is exactly what stops remote.js
    from bootstrapping a single viewer the way it does on the machine page. #}
 <script src="{{ url_for('static', filename='js/fleet-api.js') }}"></script>
+{# remote-relay.js before remote.js: it is the hub-relay fallback a viewer switches to when
+   WebRTC cannot connect, and remote.js only offers it where window.RemoteRelay exists. #}
+<script src="{{ url_for('static', filename='js/remote-relay.js') }}"></script>
 <script src="{{ url_for('static', filename='js/remote.js') }}"></script>
 <script src="{{ url_for('static', filename='js/remote-workspace.js') }}"></script>
 {% endblock %}

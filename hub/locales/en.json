@@ -1054,6 +1054,10 @@
         "help": "TURN relay URLs, tried in order. Required for peers behind NATs that block direct connections. A relay behind NAT needs three: turn:PUBLIC-HOST:3478 for peers on the internet, turn:LAN-IP:3478 for a peer inside the relay's own network, and turn:LAN-IP:3479 for two peers both inside it -- see turn/README.md. Credentials are minted per session from REMOTE_TURN_SECRET in .env; TURN is skipped if that secret is unset.",
         "placeholder": "turn:relay.example.com:3478"
       },
+      "remote.relay_fallback": {
+        "label": "Fall back to relaying through the hub",
+        "help": "When WebRTC cannot connect at all -- the TURN server is down or unreachable, or a firewall drops the traffic -- carry the session over HTTPS through the hub instead. It costs hub bandwidth (each frame passes through twice) and some extra delay, and the hub sees the picture rather than encrypted media, so every switch is recorded in the audit log. Off means a session that cannot connect directly simply fails."
+      },
       "directory.enabled": {
         "label": "Sync with Active Directory",
         "help": "Read computer objects from an on-prem domain controller so machines carry their OU, owner and AD name. Off by default; nothing contacts a DC until this is on and the fields below are filled in."
@@ -2418,6 +2422,10 @@
       "connection_failed": "Connection failed.",
       "ice_summary": "This browser gathered: {local}. The machine gathered: {remote}.",
       "ice_no_relay": "Neither side produced a 'relay' candidate, so the TURN server was not reachable from either machine — check Settings → Remote Control, the relay's firewall, and its forwarded port range.",
+      "live_relay": "Live (via hub)",
+      "relay_switching": "A direct connection could not be made, so the session is switching to the hub relay…",
+      "relay_unsupported": "The hub relay is not available because this browser cannot decode video itself (no WebCodecs).",
+      "relay_failed": "Could not switch to the hub relay: {error}",
       "logon_screen_desktop": "Lock / logon screen",
       "geom": "{width}×{height} · {encoder} · desktop {desktop}",
       "desktop_unknown": "?",
@@ -2772,6 +2780,7 @@
       "truncated": "More hosts answered than the hub will store; only the first of them are shown.",
       "nothing_found": "Nothing else answered on this subnet.",
       "no_subnets_help": "This PC has not reported an address on any subnet yet, so there is nothing it can sweep.",
+      "private_mac": "Private address (chosen by the device)",
       "state": {
         "scanning": "Sweeping",
         "done": "Swept",

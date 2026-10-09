@@ -4,7 +4,8 @@ namespace TempMonitorAgent.Remote;
 
 /// <summary>
 /// Ties capture -> scale -> NV12 -> video encoder together (roadmap #2) and drives it two ways:
-/// a live feed to a <see cref="RemotePeer"/> (the real session), and a standalone self-test that
+/// a live feed to an <see cref="IRemoteMediaSink"/> (the real session -- a WebRTC peer, or the
+/// hub relay it falls back to), and a standalone self-test that
 /// writes an Annex-B <c>.h264</c> file so the capture + encode half can be validated on a real
 /// machine (run the agent binary with <c>--remote-capture-test</c>) with no hub, browser, or
 /// session-injection involved. Both paths run the same loop, so what the file test proves is
@@ -71,18 +72,24 @@ public sealed class CaptureEncodePipeline
         return frames;
     }
 
-    /// <summary>Stream captured, encoded frames to a WebRTC peer until cancelled. Must run on a
+    /// <summary>What the live session wants told about the stream: its shape whenever it
+    /// changes, and a capture that has stalled. Both optional, and grouped because they always
+    /// travel together -- to the viewer, through the same sink the frames go to.</summary>
+    public readonly record struct CaptureHooks(
+        Action<Geometry>? OnGeometry = null, Action<string>? OnStall = null);
+
+    /// <summary>Stream captured, encoded frames to a sink until cancelled. Must run on a
     /// thread that owns <paramref name="binder"/> (see the class remarks).</summary>
-    public static void RunToPeer(
-        RemotePeer peer, LiveStreamSettings settings, CancellationToken ct, Action<string> log,
+    public static void RunToSink(
+        IRemoteMediaSink sink, LiveStreamSettings settings, CancellationToken ct, Action<string> log,
         InputDesktopWatcher? desktops = null, ThreadDesktopBinder? binder = null,
-        Action<Geometry>? onGeometry = null, Action<string>? onStall = null)
+        CaptureHooks hooks = default)
     {
         RunLoop(settings,
             keepGoing: () => !ct.IsCancellationRequested,
-            onEncoded: (bytes, durationRtp) => peer.SendFrame(bytes, durationRtp),
+            onEncoded: (bytes, durationRtp) => sink.SendFrame(bytes, durationRtp),
             log: log, ct: ct, desktops: desktops, binder: binder,
-            onGeometry: onGeometry, onStall: onStall);
+            onGeometry: hooks.OnGeometry, onStall: hooks.OnStall);
     }
 
     /// <summary>The shared loop. See the class remarks for why every change is a rebuild.</summary>
@@ -116,12 +123,19 @@ public sealed class CaptureEncodePipeline
                 // 2. A settings change (quality, monitor, codec) is just another rebuild reason.
                 var wanted = live.Current;
                 bool settingsChanged = session is not null && !session.Matches(wanted);
+                //    So is a keyframe request (the hub relay switching on, or its viewer resyncing) --
+                //    a rebuild is the only path guaranteed to start with SPS/PPS + IDR.
+                //    Taken unconditionally so a request made before the first build is consumed
+                //    by it rather than forcing a second one straight after.
+                bool keyframeWanted = live.TakeKeyframeRequest() && session is not null;
 
-                if (session is null || desktopSwitched || settingsChanged)
+                if (session is null || desktopSwitched || settingsChanged || keyframeWanted)
                 {
-                    string reason = session is null ? "start"
-                                  : desktopSwitched ? $"desktop switch -> {binder?.AttachedName ?? "?"}"
-                                  : "settings change";
+                    string reason;
+                    if (session is null) reason = "start";
+                    else if (desktopSwitched) reason = $"desktop switch -> {binder?.AttachedName ?? "?"}";
+                    else if (settingsChanged) reason = "settings change";
+                    else reason = "keyframe requested";
                     session?.Dispose();
                     session = CaptureSession.Open(wanted, log);
                     if (session is null)

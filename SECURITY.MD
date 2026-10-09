@@ -279,7 +279,13 @@ We take security seriously for:
 - **Authentication & Authorization** — Google sign-in, enrollment secrets, token handling, permission groups
 - **Update Mechanism** — Ed25519 signature verification, manifest handling
 - **Encryption & Backups** — AES-256-GCM, key derivation, credential storage
-- **Remote Control (`turn/`)** — WebRTC, TURN credential minting, session management
+- **Remote Control (`turn/`)** — WebRTC, TURN credential minting, session management, and the
+  hub-relayed fallback (`hub/remote_relay.py`). Note what the fallback changes: media through
+  coturn is SRTP the relay cannot read, while a session relayed through the hub is encrypted
+  only as far as the hub (HTTPS), so the hub process sees the picture. It gains no capability
+  by that -- it already holds every agent's bearer token and can start a session on any PC an
+  operator has in scope -- but frames are kept in memory only, the switch is audited, it is
+  never offered for a machine borrowed from another hub, and `remote.relay_fallback` turns it off.
 - **Audit Logging** — Tampering, omission, or integrity issues
 
 ### Out of Scope

@@ -258,6 +258,41 @@ def init_events_db(db_path):
         if "dropped_last" not in state_columns:
             conn.execute("ALTER TABLE machine_event_state "
                          "ADD COLUMN dropped_last INTEGER NOT NULL DEFAULT 0")
+        # hub 1.141.0, the two residue columns roadmap #17 left open. Both nullable, and NULL
+        # means the old behaviour rather than a guess: `collected_version` is NULL for an agent
+        # too old to say which document a report was scanned under (rules then fall back to
+        # comparing timestamps), and `last_error_at` is NULL for a machine that has never
+        # reported a collector error -- which is every machine on an upgrading hub, since we
+        # did not record when the past ones happened.
+        #
+        # `collected_version`: the subscription document the LATEST report was filtered with,
+        # from the report itself. See rule_counters for what it closes.
+        # `last_error_at`: when a report last carried a collector error. `error` is overwritten
+        # by the next clean report, which is right for "is the collector working now" and
+        # wrong for "can the counting window be trusted" -- see rule_counters.
+        if "collected_version" not in state_columns:
+            conn.execute("ALTER TABLE machine_event_state ADD COLUMN collected_version TEXT")
+        if "last_error_at" not in state_columns:
+            conn.execute("ALTER TABLE machine_event_state ADD COLUMN last_error_at INTEGER")
+
+        # WHICH IDS EACH DOCUMENT VERSION ASKED FOR. The version is a content hash, so the hub
+        # cannot tell from a version alone what an agent was collecting; this is the lookup that
+        # lets a report's own `collected_version` answer "was this id being watched when these
+        # records were chosen". One row per distinct document ever served, written only when a
+        # subscription changes, never on a heartbeat. Not pruned: it grows by one short row per
+        # edit, and a version an agent still holds must stay resolvable however old it is.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS event_document_versions (
+                version     TEXT PRIMARY KEY,
+                event_ids   TEXT NOT NULL,   -- JSON array of the ids it names explicitly
+                created_at  INTEGER NOT NULL
+            )
+            """
+        )
+    # The document in force when this hub starts, so agents already holding it -- every agent,
+    # on an upgrading hub -- resolve from their very next report.
+    remember_document(db_path)
 
 
 # ================================
@@ -380,6 +415,7 @@ def create_subscription(db_path, *, name, log, event_ids=None, levels=None,
             (subscription_id, name, log, json.dumps(ids), json.dumps(slugs), provider,
              1 if enabled else 0, now, created_by, now),
         )
+    remember_document(db_path)
     return get_subscription(db_path, subscription_id)
 
 
@@ -412,6 +448,7 @@ def update_subscription(db_path, subscription_id, **fields):
             (name, log, json.dumps(ids), json.dumps(slugs), provider[:MAX_PROVIDER_CHARS],
              1 if enabled else 0, int(time.time()), str(subscription_id)),
         )
+    remember_document(db_path)
     return get_subscription(db_path, subscription_id)
 
 
@@ -425,7 +462,10 @@ def delete_subscription(db_path, subscription_id):
     with get_conn(db_path) as conn:
         cur = conn.execute("DELETE FROM event_subscriptions WHERE id = ?",
                            (str(subscription_id),))
-        return cur.rowcount > 0
+        deleted = cur.rowcount > 0
+    if deleted:
+        remember_document(db_path)
+    return deleted
 
 
 def document(db_path):
@@ -456,6 +496,44 @@ def document(db_path):
     return {"version": document_version(subscriptions),
             "subscriptions": subscriptions,
             "max_events": MAX_EVENTS_PER_REPORT}
+
+
+def remember_document(db_path):
+    """Record which event ids the CURRENT document names, under its version. Idempotent.
+
+    Only ids named explicitly count. A subscription with no ids ("any id on this channel")
+    does collect, say, 4625 if its level filter lets it through -- but the per-id counters only
+    exist for ids somebody named, and treating a channel-wide subscription as covering every
+    id would make the residue go the wrong way: a count trusted that was not being watched.
+    Leaving it out costs, at most, one report of UNKNOWN when an id is first named on a channel
+    that was already collected.
+    """
+    current = document(db_path)
+    ids = sorted({int(event_id)
+                  for subscription in current["subscriptions"]
+                  for event_id in subscription.get("event_ids") or []})
+    with get_conn(db_path) as conn:
+        conn.execute(
+            "INSERT OR IGNORE INTO event_document_versions (version, event_ids, created_at) "
+            "VALUES (?, ?, ?)",
+            (current["version"], json.dumps(ids), int(time.time())),
+        )
+
+
+def document_ids(db_path, version):
+    """The ids document `version` named, as a frozenset -- or None if this hub never served
+    that version (an agent holding a document from before hub 1.141.0, or none at all)."""
+    if not version:
+        return None
+    with get_conn(db_path) as conn:
+        row = conn.execute("SELECT event_ids FROM event_document_versions WHERE version = ?",
+                           (str(version),)).fetchone()
+    if row is None:
+        return None
+    try:
+        return frozenset(int(event_id) for event_id in json.loads(row["event_ids"]))
+    except (TypeError, ValueError):
+        return None
 
 
 def document_version(subscriptions):
@@ -555,6 +633,70 @@ def _normalize(entry, now):
     }
 
 
+def _store_record(conn, machine, record, now):
+    """Roll one normalised record into an existing row, or insert it. Returns True if it was
+    inserted as a new row, False if it was rolled into one."""
+    # Proximity is tested in BOTH directions, not just backwards. The obvious version -- "is
+    # there a row whose last occurrence is within the window before this one" -- is right for
+    # records arriving in order and wrong for the case this feature has to survive: a machine
+    # back from a day offline reports a day of events, and a record from yesterday morning
+    # would otherwise be rolled into a row from this afternoon and drag its `first_seen` back
+    # twenty hours. The count would still be right and the window would be a lie.
+    window = ROLLUP_WINDOW_SECONDS
+    existing = conn.execute(
+        """
+        SELECT id, count, first_seen, last_seen FROM machine_events
+         WHERE machine = ? AND rollup_key = ?
+           AND last_seen >= ? AND first_seen <= ?
+         ORDER BY last_seen DESC LIMIT 1
+        """,
+        (machine, record["rollup_key"],
+         record["occurred_at"] - window, record["occurred_at"] + window),
+    ).fetchone()
+    if existing:
+        conn.execute(
+            """
+            UPDATE machine_events
+               SET count = count + 1,
+                   first_seen = MIN(first_seen, ?),
+                   last_seen = MAX(last_seen, ?)
+             WHERE id = ?
+            """,
+            (record["occurred_at"], record["occurred_at"], existing["id"]),
+        )
+        return False
+    conn.execute(
+        """
+        INSERT INTO machine_events
+            (id, machine, log, provider, event_id, level, message,
+             rollup_key, count, first_seen, last_seen, recorded_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)
+        """,
+        (uuid.uuid4().hex, machine, record["log"], record["provider"],
+         record["event_id"], record["level"], record["message"],
+         record["rollup_key"], record["occurred_at"], record["occurred_at"], now),
+    )
+    return True
+
+
+def _read_report(payload):
+    """(entries, dropped, error, collected_version) out of one heartbeat's events object,
+    leniently -- see record_events for why nothing here raises."""
+    if not isinstance(payload, dict):
+        payload = {"events": payload if isinstance(payload, list) else []}
+    entries = payload.get("events")
+    entries = entries if isinstance(entries, list) else []
+    try:
+        dropped = max(0, int(payload.get("dropped") or 0))
+    except (TypeError, ValueError):
+        dropped = 0
+    error = str(payload.get("error") or "").strip()[:500] or None
+    # The document this report was filtered with (agent 3.42.0+). Absent from an older agent,
+    # which stores NULL and keeps the timestamp comparison -- see rule_counters.
+    collected_version = str(payload.get("version") or "").strip()[:64] or None
+    return entries, dropped, error, collected_version
+
+
 def record_events(db_path, machine, payload):
     """Store what one machine's heartbeat carried. Returns (stored, rolled_up).
 
@@ -568,15 +710,7 @@ def record_events(db_path, machine, payload):
     Never raises on content: see `_normalize`. It raises only on a database that is not
     there, which is a hub problem rather than a report problem.
     """
-    if not isinstance(payload, dict):
-        payload = {"events": payload if isinstance(payload, list) else []}
-    entries = payload.get("events")
-    entries = entries if isinstance(entries, list) else []
-    try:
-        dropped = max(0, int(payload.get("dropped") or 0))
-    except (TypeError, ValueError):
-        dropped = 0
-    error = str(payload.get("error") or "").strip()[:500] or None
+    entries, dropped, error, collected_version = _read_report(payload)
 
     now = int(time.time())
     # The agent caps too, and the hub caps again rather than trusting it. Nothing here is
@@ -601,64 +735,33 @@ def record_events(db_path, machine, payload):
             record = _normalize(entry, now)
             if record is None:
                 continue
-            # Proximity is tested in BOTH directions, not just backwards. The obvious
-            # version -- "is there a row whose last occurrence is within the window before
-            # this one" -- is right for records arriving in order and wrong for the case
-            # this feature has to survive: a machine back from a day offline reports a day
-            # of events, and a record from yesterday morning would otherwise be rolled into
-            # a row from this afternoon and drag its `first_seen` back twenty hours. The
-            # count would still be right and the window would be a lie.
-            window = ROLLUP_WINDOW_SECONDS
-            existing = conn.execute(
-                """
-                SELECT id, count, first_seen, last_seen FROM machine_events
-                 WHERE machine = ? AND rollup_key = ?
-                   AND last_seen >= ? AND first_seen <= ?
-                 ORDER BY last_seen DESC LIMIT 1
-                """,
-                (machine, record["rollup_key"],
-                 record["occurred_at"] - window, record["occurred_at"] + window),
-            ).fetchone()
-            if existing:
-                conn.execute(
-                    """
-                    UPDATE machine_events
-                       SET count = count + 1,
-                           first_seen = MIN(first_seen, ?),
-                           last_seen = MAX(last_seen, ?)
-                     WHERE id = ?
-                    """,
-                    (record["occurred_at"], record["occurred_at"], existing["id"]),
-                )
+            if _store_record(conn, machine, record, now):
+                stored += 1
+            else:
                 rolled += 1
-                continue
-            conn.execute(
-                """
-                INSERT INTO machine_events
-                    (id, machine, log, provider, event_id, level, message,
-                     rollup_key, count, first_seen, last_seen, recorded_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)
-                """,
-                (uuid.uuid4().hex, machine, record["log"], record["provider"],
-                 record["event_id"], record["level"], record["message"],
-                 record["rollup_key"], record["occurred_at"], record["occurred_at"], now),
-            )
-            stored += 1
 
         # The state row is written on EVERY report, including the empty ones. That is the
         # whole reason it exists -- see init_events_db.
+        #
+        # `last_error_at` only ever moves forward on a report WITH an error, and is kept
+        # through clean ones -- that persistence is the point of the column.
         conn.execute(
             """
             INSERT INTO machine_event_state
-                (machine, reported_at, dropped, error, dropped_last)
-            VALUES (?, ?, ?, ?, ?)
+                (machine, reported_at, dropped, error, dropped_last, collected_version,
+                 last_error_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(machine) DO UPDATE SET
                 reported_at = excluded.reported_at,
                 dropped = machine_event_state.dropped + excluded.dropped,
                 error = excluded.error,
-                dropped_last = excluded.dropped_last
+                dropped_last = excluded.dropped_last,
+                collected_version = excluded.collected_version,
+                last_error_at = CASE WHEN excluded.error IS NOT NULL THEN excluded.reported_at
+                                     ELSE machine_event_state.last_error_at END
             """,
-            (machine, now, dropped, error, dropped),
+            (machine, now, dropped, error, dropped, collected_version,
+             now if error else None),
         )
 
     if stored:
@@ -914,14 +1017,14 @@ def subscribed_since(db_path):
     brute-force would report the machine clean while it was being sprayed.
 
     The caller compares this against the machine's own `reported_at` to decide whether that
-    machine can have been collecting yet. **This is necessary but not quite sufficient**, and
-    the residue is worth stating: the heartbeat that first carries the new document is also a
+    machine can have been collecting yet. **That is the FALLBACK, for an agent older than
+    3.42.0**, and it has a residue: the heartbeat that first carries the new document is also a
     report, so there is one heartbeat -- about ten seconds -- in which `reported_at` is newer
-    than the subscription and the machine still has not looked. Closing that properly needs
-    the agent's adopted document version stored per machine, which `machine_event_state` does
-    not have. Ten seconds against a window measured in hours is a residue; the untreated
-    version of this bug is unbounded, because a machine that is off for a week keeps answering
-    zero the whole time.
+    than the subscription and the machine still has not looked. A current agent names the
+    document each report was filtered with, and `rule_counters` answers from that instead
+    (`collected_ids`), which closes the residue exactly. The untreated version of this bug is
+    unbounded either way, because a machine that is off for a week keeps answering zero the
+    whole time.
 
     The MINIMUM across enabled subscriptions naming an id, not the maximum: if an old
     subscription already covered 4625, adding a second one naming it does not make yesterday's
@@ -945,7 +1048,8 @@ def rule_counters(db_path, machine, *, event_ids=(),
                   window_seconds=DEFAULT_RULE_WINDOW_SECONDS, now=None):
     """One machine's windowed occurrence counts, for the rules engine.
 
-    Returns `{"reported_at", "error", "incomplete", "total", "by_level", "by_event_id"}`.
+    Returns `{"reported_at", "error", "incomplete", "blind", "collected_ids", "total",
+    "by_level", "by_event_id"}`.
     `reported_at` is
     None for a machine this module has never been told about, and **that is not the same as
     zero**: it is an agent too old to know what a subscription is, or one that has never
@@ -978,6 +1082,19 @@ def rule_counters(db_path, machine, *, event_ids=(),
     -- a share computed from `first_seen`/`last_seen` would be an invented distribution
     presented to an operator as a measurement.
 
+    `blind` is the fifth (hub 1.141.0, roadmap #17): a machine whose collector reported an
+    error at any point INSIDE the counting window. `error` clears on the next clean report,
+    and that is right for "is the collector working now" -- but a count over the last day
+    still includes the stretch the machine spent unable to read the channel, so one clean
+    report would otherwise restore trust in a number with a hole in it. It stays true until the
+    window has moved past the last error.
+
+    `collected_ids` is the set of ids the document behind the LATEST report named, or None for
+    an agent too old to say which document that was. It replaces the caller's timestamp
+    comparison against `subscribed_since` when present, closing the one-heartbeat residue that
+    comparison leaves (see there): an id is trusted exactly when the report's own document was
+    asking for it.
+
     An id named by two subscriptions is one entry counted once; the subscriptions overlap,
     the event did not happen twice.
     """
@@ -987,8 +1104,8 @@ def rule_counters(db_path, machine, *, event_ids=(),
 
     with get_conn(db_path) as conn:
         state = conn.execute(
-            "SELECT reported_at, error, dropped_last FROM machine_event_state "
-            "WHERE machine = ?", (machine,)).fetchone()
+            "SELECT reported_at, error, dropped_last, collected_version, last_error_at "
+            "FROM machine_event_state WHERE machine = ?", (machine,)).fetchone()
         totals = conn.execute(
             "SELECT COALESCE(SUM(count), 0) AS n FROM machine_events "
             "WHERE machine = ? AND last_seen >= ?", (machine, since)).fetchone()
@@ -1010,6 +1127,10 @@ def rule_counters(db_path, machine, *, event_ids=(),
         "error": (state["error"] or None) if state else None,
         # Whether the LATEST report lost anything, not whether this machine ever has.
         "incomplete": bool(state and int(state["dropped_last"] or 0) > 0),
+        # Whether the counting window still contains a stretch the collector was blind for.
+        "blind": bool(state and state["last_error_at"] is not None
+                      and int(state["last_error_at"]) >= since),
+        "collected_ids": document_ids(db_path, state["collected_version"]) if state else None,
         "total": int(totals["n"]),
         "by_level": {row["level"]: int(row["n"]) for row in by_level},
         # A subscribed id with no records in the window is 0, not absent. The machine did

@@ -326,7 +326,20 @@
         hosts.forEach((host) => {
             const row = el('tr');
             row.appendChild(el('td', null, host.ip));
-            row.appendChild(el('td', null, host.mac || '—'));
+            const macCell = el('td', null, host.mac || '—');
+            // The maker under the address (hub/oui.py), because a MAC on its own does not tell
+            // an operator whether the unmanaged thing at .47 is a printer or a stranger's
+            // laptop. A private address gets a label instead of a lookup: the device made it
+            // up, so no registry entry could be its maker -- and "private" itself usually
+            // means a phone. textContent via el(), like every cell here: a vendor name is
+            // registry text, not markup.
+            if (host.vendor) {
+                macCell.appendChild(el('div', 'stat-card__meta', host.vendor));
+            } else if (host.private_mac) {
+                macCell.appendChild(el('div', 'stat-card__meta',
+                                       t('machine.discovery.private_mac')));
+            }
+            row.appendChild(macCell);
             row.appendChild(el('td', null, host.hostname || '—'));
             const knownCell = el('td');
             knownCell.appendChild(el('div', null, labelFor(CLASS_LABELS, host.classification)));
