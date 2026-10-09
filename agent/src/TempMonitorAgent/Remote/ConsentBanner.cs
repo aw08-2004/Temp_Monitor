@@ -18,6 +18,14 @@ namespace TempMonitorAgent.Remote;
 /// the life of the thread. That is why <see cref="RequestConsentAsync"/> runs the prompt on its
 /// own dedicated, throwaway thread rather than the thread pool: a poisoned pool thread would go
 /// back into the pool and silently break whichever desktop-bound loop landed on it later.
+///
+/// Note the prompt thread is poisoned before the prompt shows, not only by it: it is started as
+/// an STA, and an STA owns COM's hidden message-only window (OleMainThreadWndClass) from birth
+/// when it is the process's first, and from its first pumping wait otherwise; EnumThreadWindows
+/// lists neither. That is harmless here, because this prompt never attaches -- it shows on the
+/// desktop the helper was launched onto. A UI thread that must attach somewhere has to be born
+/// MTA, attach, and only then become an STA; <see cref="RecordingBadge"/> learned that in
+/// production.
 /// </summary>
 public static class ConsentBanner
 {

@@ -285,6 +285,22 @@ seen on a real desktop with `--recording-badge-test`. Still owed:
   `remote_signals`. From hub 1.143.0 the reason is kept on the recording (`end_detail`), shown
   after the message and written to the `recording_end` audit entry. That makes the next
   failure diagnosable from the console instead of from the database.
+- **Cause found and fixed in source, 2026-10-09; owed as agent 3.43.1.** The badge thread
+  was started as an STA. The runtime initialises COM before the thread's first line, and the
+  first STA in a process gets COM's hidden, message-only `OleMainThreadWndClass` window at
+  that moment. A thread that owns a window cannot `SetThreadDesktop`, even to a new handle of
+  the desktop it is already on. `EnumThreadWindows` does not list message-only windows, so
+  the thread looked empty. The badge thread now starts as an MTA, attaches, and then switches
+  to STA (`TrySetApartmentState(Unknown)` then `STA`). Setting STA after the attach without
+  `Unknown` does not work, because on .NET 10 a thread with no apartment set is already MTA.
+  The same change closes a badge that comes up after its timeout, which used to stay on
+  screen for the rest of the session, and reports the desktop with a failure.
+  `RecordingBadgeTests` pins all of this against a private desktop, with no SYSTEM rights
+  needed. Each test failed on the old code, and the suite stays at 595/595. Still owed:
+  - **Cut agent 3.43.1** (`agent/release.ps1 -Version 3.43.1`; a PATCH, nothing new to gate).
+  - **Verify as SYSTEM:** record a real session on AIO-HOBBY, then press Win+L to check the
+    follow to Winlogon. The tests prove the attach only as an ordinary user against a private
+    desktop.
 
 **7. Hub in Docker (#28), owed on the hub host.** Image, compose file and publishing workflow
 built 2026-10-09 (hub 1.143.0). The image was built and run locally against a scratch volume:
