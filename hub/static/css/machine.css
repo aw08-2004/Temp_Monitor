@@ -833,11 +833,6 @@
     font-size: var(--text-sm);
 }
 
-/* The recording-reason dialog: one question, so not the 620px editor width. */
-.modal--narrow {
-    width: min(460px, 92vw);
-}
-
 .remote-stage {
     position: relative;
     background: #000;

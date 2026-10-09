@@ -91,19 +91,6 @@
         <button type="button" class="btn btn--primary" id="recordings-share-save">{{ t('common.save') }}</button>
     </div>
 </dialog>
-
-<dialog class="modal recordings-confirm" id="recordings-delete" aria-labelledby="recordings-delete-title">
-    <div class="modal__head">
-        <h2 class="modal__title" id="recordings-delete-title">{{ t('recordings.delete_title') }}</h2>
-    </div>
-    <div class="modal__body">
-        <p id="recordings-delete-text"></p>
-    </div>
-    <div class="modal__foot">
-        <button type="button" class="btn btn--ghost" id="recordings-delete-cancel">{{ t('common.cancel') }}</button>
-        <button type="button" class="btn btn--danger" id="recordings-delete-ok">{{ t('common.delete') }}</button>
-    </div>
-</dialog>
 {% endblock %}
 {% block page_scripts %}
 <script src="{{ url_for('static', filename='js/recordings.js') }}"></script>

@@ -1293,10 +1293,6 @@
     width: min(1100px, 95vw);
 }
 
-.recordings-confirm {
-    width: min(460px, 92vw);
-}
-
 .recordings-share-groups {
     display: flex;
     flex-direction: column;

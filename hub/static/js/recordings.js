@@ -14,13 +14,11 @@
     const player = $('recordings-player');
     const video = $('recordings-video');
     const shareDialog = $('recordings-share');
-    const deleteDialog = $('recordings-delete');
     const errorLine = $('recordings-error');
 
     let groupNames = new Map();
     let allGroups = [];
     let sharing = null;     // the recording the share dialog is editing
-    let deleting = null;
 
     function showError(message) {
         errorLine.textContent = message || '';
@@ -234,30 +232,25 @@
     $('recordings-share-cancel').addEventListener('click', () => shareDialog.close());
 
     // ---- deleting --------------------------------------------------------------------
-    function openDelete(rec) {
-        deleting = rec;
-        $('recordings-delete-text').textContent =
-            t('recordings.delete_confirm', { machine: rec.machine, time: fmtTime(rec.created_at) });
-        deleteDialog.showModal();
-        // Destructive, so the safe answer is the one Enter reaches.
-        $('recordings-delete-cancel').focus();
-    }
-
-    async function confirmDelete() {
-        if (!deleting) return;
-        const response = await fetch(`/api/recordings/${encodeURIComponent(deleting.id)}`,
+    // The console's shared confirmDialog (common.js): destructive, so the focus starts on
+    // Cancel and a reflexive Enter deletes nothing.
+    async function openDelete(rec) {
+        const ok = await confirmDialog({
+            title: t('recordings.delete_title'),
+            message: t('recordings.delete_confirm',
+                       { machine: rec.machine, time: fmtTime(rec.created_at) }),
+            confirmLabel: t('common.delete'),
+            danger: true,
+        });
+        if (!ok) return;
+        const response = await fetch(`/api/recordings/${encodeURIComponent(rec.id)}`,
                                      { method: 'DELETE' });
-        deleteDialog.close();
-        deleting = null;
         if (!response.ok) {
             const data = await response.json().catch(() => ({}));
             showError(data.error || t('common.hub_error', { status: response.status }));
         }
         load();
     }
-
-    $('recordings-delete-ok').addEventListener('click', confirmDelete);
-    $('recordings-delete-cancel').addEventListener('click', () => deleteDialog.close());
 
     load();
 })();
