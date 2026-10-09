@@ -29,13 +29,17 @@ name: "Hub image"
 # is no API for it). The first publish is therefore followed by a one-time, one-way switch in
 # the package's settings: Danger Zone -> Change visibility -> Public. ROADMAP.MD owes it.
 
+# A push publishes, so it triggers only on hub/**: every hub/ change carries a HUB_VERSION
+# bump, and anything else has nothing to release. A push touching only this file or the lock
+# tool used to run the "already published" check against the unchanged version and go red
+# asking for a bump that would ship a no-op release to every hub (PR review). Pull requests
+# still trigger on all three, so a change to the workflow or the checker is built and checked
+# before it merges.
 on:
   push:
     branches: [main, beta]
     paths:
       - "hub/**"
-      - "tools/lock_hub_requirements.py"
-      - ".github/workflows/hub-image.yml"
   pull_request:
     branches: [main]
     paths:

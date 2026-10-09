@@ -80,13 +80,11 @@ def test_auto_update_forced_off():
 
 def test_perform_refuses():
     print("\n-- perform_hub_update refuses in image mode --")
-    called = []
-    with (mock.patch.object(app, "_perform_hub_update_git",
-                            lambda root: called.append("git") or True),
-          mock.patch.object(app, "_perform_hub_update_archive",
-                            lambda d: called.append("archive") or True)):
+    # Both strategies would report success, so only the image-mode refusal can make this False.
+    with (mock.patch.object(app, "_perform_hub_update_git", return_value=True) as git,
+          mock.patch.object(app, "_perform_hub_update_archive", return_value=True) as archive):
         check("returns False", app.perform_hub_update(app.HUB_CODE_DIR) is False)
-        check("neither strategy ran", called == [])
+        check("neither strategy ran", not git.called and not archive.called)
 
 
 def test_watcher_reads_but_never_installs():
@@ -95,17 +93,14 @@ def test_watcher_reads_but_never_installs():
     # seeded "999.0.0" on a thread this test does not own. That the read is cached is
     # test_versions.py's job; this module only cares that nothing installs.
     print("\n-- the watcher still reads main's version, and never installs it --")
-    fetched, applied = [], []
-    with (mock.patch.object(app, "fetch_remote_hub_version",
-                            lambda: fetched.append(1) or "999.0.0"),
-          mock.patch.object(app, "perform_hub_update",
-                            lambda code_dir: applied.append(code_dir) or False)):
+    with (mock.patch.object(app, "fetch_remote_hub_version", return_value="999.0.0") as fetch,
+          mock.patch.object(app, "perform_hub_update", return_value=False) as perform):
         settings.set_many(app.DB_PATH, {"hub.auto_update": True})
         try:
             threading.Thread(target=app.hub_update_watcher, daemon=True).start()
             time.sleep(0.5)
-            check("reads main's version, so the notice can say so", len(fetched) >= 1)
-            check("does not call perform_hub_update", applied == [])
+            check("reads main's version, so the notice can say so", fetch.called)
+            check("does not call perform_hub_update", not perform.called)
         finally:
             settings.reset(app.DB_PATH, ["hub.auto_update"])
 
@@ -113,9 +108,8 @@ def test_watcher_reads_but_never_installs():
 def test_routes():
     print("\n-- /api/hub/version and POST /api/hub/update --")
     # The getter is stubbed rather than the cache seeded, for the race described above.
-    started = []
-    with (mock.patch.object(app, "get_latest_hub_version", lambda: "999.0.0"),
-          mock.patch.object(app, "_hub_update_worker", lambda target: started.append(target))):
+    with (mock.patch.object(app, "get_latest_hub_version", return_value="999.0.0"),
+          mock.patch.object(app, "_hub_update_worker") as worker):
         try:
             client = app.app.test_client()
             console_session.sign_in(client, "tester@example.com")
@@ -126,7 +120,7 @@ def test_routes():
             time.sleep(0.2)
             check("POST refused with 409 although an update is available",
                   resp.status_code == 409)
-            check("no worker started", started == [])
+            check("no worker started", not worker.called)
             check("status stays idle", app.get_hub_update_state()["status"] == "idle")
 
             page = client.get("/").get_data(as_text=True)
@@ -140,19 +134,14 @@ def test_wsgi_self_heal_skipped():
     print("\n-- wsgi.py does not self-heal from main in image mode --")
     import urllib.request
     import wsgi
-    fetched = []
-
-    def refuse(*args, **kwargs):
-        fetched.append(args)
-        raise OSError("no network in this test")
-
     # A root with no .git, so the dev-checkout guard does not answer first.
     no_git_root = tempfile.mkdtemp(prefix="hub-update-mode-root-")
     with (mock.patch.object(wsgi, "_WORKTREE_ROOT", no_git_root),
-          mock.patch.object(urllib.request, "urlopen", refuse)):
+          mock.patch.object(urllib.request, "urlopen",
+                            side_effect=OSError("no network in this test")) as urlopen):
         healed = wsgi._self_heal_missing_modules(ModuleNotFoundError("No module named 'x'"))
         check("returns False", healed is False)
-        check("never reached for the archive", fetched == [])
+        check("never reached for the archive", not urlopen.called)
 
 
 def test_dockerfile_sets_mode():
