@@ -117,13 +117,8 @@ def test_refresh_refuses_a_truncated_download():
         for name, text in (("oui.csv", MAL), ("mam.csv", MAM), ("oui36.csv", MAS)):
             with open(os.path.join(d, name), "w", encoding="utf-8") as fh:
                 fh.write(text)
-        original = refresh_oui.OUT
-        refresh_oui.OUT = os.path.join(d, "out", "oui.tsv.gz")
-        try:
-            code = refresh_oui.main(["--from", d])
-        finally:
-            target = refresh_oui.OUT
-            refresh_oui.OUT = original
+        target = os.path.join(d, "out", "oui.tsv.gz")
+        code = refresh_oui.main(["--from", d], out=target)
         check("four prefixes is not a registry: exit non-zero", code == 1)
         check("and nothing was written over the snapshot", not os.path.exists(target))
 

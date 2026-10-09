@@ -270,6 +270,54 @@ def _start_index(relay, after):
     return 0, True
 
 
+def _cursor(after):
+    """A client's cursor as a non-negative int; anything unparseable starts from the top."""
+    try:
+        return max(0, int(after))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _wait_for(relay, queue, after, wait_seconds):
+    """Wait on `relay.cond` (held by the caller) until `queue` has an entry newer than `after`,
+    the relay closes, or the wait runs out. Returns "ready", "closed" or "timeout".
+
+    Shared by both directions, so the two long-polls cannot drift apart in how they treat a
+    relay closed mid-wait -- which has to be "return at once", or a session's end would hold a
+    request thread for the full wait."""
+    deadline = time.monotonic() + max(0.0, float(wait_seconds))
+    while True:
+        if relay.closed:
+            return "closed"
+        if queue and queue[-1][0] > after:
+            return "ready"
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            relay._touch()
+            return "timeout"
+        relay.cond.wait(remaining)
+
+
+def _collect_down(relay, after, max_bytes):
+    """The records a viewer at cursor `after` gets next, and its new cursor. Caller holds
+    relay.cond. See _start_index for where a new or lagging viewer starts."""
+    index, resync = _start_index(relay, after)
+    out, size = [], 0
+    if resync and relay.last_geom is not None:
+        # Put the geometry first so the viewer knows the picture's size before its first
+        # frame -- see Relay.last_geom.
+        out.append((KIND_CONTROL, 0, relay.last_geom))
+        size += len(relay.last_geom)
+    cursor = after
+    for seq, kind, flags, payload in list(relay.down)[index:]:
+        if out and size + len(payload) > max_bytes:
+            break
+        out.append((kind, flags, payload))
+        size += len(payload)
+        cursor = seq
+    return out, cursor
+
+
 def read_down(session_id, after, wait_seconds=DEFAULT_WAIT_SECONDS, max_bytes=MAX_UPLOAD_BYTES):
     """Long-poll a session's down stream for records newer than `after`.
 
@@ -277,40 +325,15 @@ def read_down(session_id, after, wait_seconds=DEFAULT_WAIT_SECONDS, max_bytes=MA
     (kind, flags, payload). Waits up to `wait_seconds` for something to arrive; an empty list
     with state "open" just means "ask again".
     """
-    try:
-        after = max(0, int(after))
-    except (TypeError, ValueError):
-        after = 0
+    after = _cursor(after)
     relay = get_relay(session_id)
     if relay is None:
         return [], after, "closed"
-    deadline = time.monotonic() + max(0.0, float(wait_seconds))
     with relay.cond:
-        while True:
-            if relay.closed:
-                return [], after, "closed"
-            if relay.down and relay.down[-1][0] > after:
-                break
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                relay._touch()
-                return [], after, "open"
-            relay.cond.wait(remaining)
-
-        index, resync = _start_index(relay, after)
-        out, size = [], 0
-        if resync and relay.last_geom is not None:
-            # Put the geometry first so the viewer knows the picture's size before its first
-            # frame -- see Relay.last_geom.
-            out.append((KIND_CONTROL, 0, relay.last_geom))
-            size += len(relay.last_geom)
-        cursor = after
-        for seq, kind, flags, payload in list(relay.down)[index:]:
-            if out and size + len(payload) > max_bytes:
-                break
-            out.append((kind, flags, payload))
-            size += len(payload)
-            cursor = seq
+        outcome = _wait_for(relay, relay.down, after, wait_seconds)
+        if outcome != "ready":
+            return [], after, "closed" if outcome == "closed" else "open"
+        out, cursor = _collect_down(relay, after, max_bytes)
         relay._touch()
         return out, cursor, "open"
 
@@ -352,25 +375,14 @@ def read_up(session_id, after, wait_seconds=DEFAULT_WAIT_SECONDS):
     """Long-poll a session's up stream (the agent's side). Returns (messages, next_cursor,
     state) where messages are JSON strings, oldest first. Unlike the down stream there is no
     resync: input is never skipped to catch up, because a dropped key-up is a key held down."""
-    try:
-        after = max(0, int(after))
-    except (TypeError, ValueError):
-        after = 0
+    after = _cursor(after)
     relay = get_relay(session_id)
     if relay is None:
         return [], after, "closed"
-    deadline = time.monotonic() + max(0.0, float(wait_seconds))
     with relay.cond:
-        while True:
-            if relay.closed:
-                return [], after, "closed"
-            if relay.up and relay.up[-1][0] > after:
-                break
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                relay._touch()
-                return [], after, "open"
-            relay.cond.wait(remaining)
+        outcome = _wait_for(relay, relay.up, after, wait_seconds)
+        if outcome != "ready":
+            return [], after, "closed" if outcome == "closed" else "open"
         out = [(seq, text) for seq, text in relay.up if seq > after]
         relay._touch()
         return [text for _, text in out], out[-1][0], "open"

@@ -129,6 +129,9 @@ public sealed class HubRelayClient : IRemoteMediaSink, IDisposable
         _pending.Release();
     }
 
+    /// <summary>What one upload attempt came to.</summary>
+    private enum UploadOutcome { Sent, Lost, Ended }
+
     private async Task UploadLoopAsync(CancellationToken ct)
     {
         bool firstAccepted = false;
@@ -137,15 +140,8 @@ public sealed class HubRelayClient : IRemoteMediaSink, IDisposable
             try { await _pending.WaitAsync(ct); }
             catch (OperationCanceledException) { return; }
 
-            List<(byte Kind, byte Flags, byte[] Payload)> batch;
-            lock (_gate)
-            {
-                if (_queue.Count == 0) continue;
-                batch = new List<(byte, byte, byte[])>(_queue);
-                _queue.Clear();
-                _queuedFrames = 0;
-                _queuedControl = 0;
-            }
+            var batch = TakeBatch();
+            if (batch is null) continue;
             // Every queued item released the semaphore once; this batch consumed them all.
             while (_pending.CurrentCount > 0)
             {
@@ -153,38 +149,65 @@ public sealed class HubRelayClient : IRemoteMediaSink, IDisposable
             }
 
             var body = RelayFraming.Frame(batch);
-            try
+            var outcome = await UploadOnceAsync(body, ct);
+            if (outcome == UploadOutcome.Ended || ct.IsCancellationRequested) return;
+            if (outcome == UploadOutcome.Lost)
             {
-                using var content = new ByteArrayContent(body);
-                content.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
-                using var resp = await _http.PostAsync(_downUrl, content, ct);
-                if (resp.StatusCode is HttpStatusCode.Conflict or HttpStatusCode.NotFound)
-                {
-                    End($"hub refused relay upload ({(int)resp.StatusCode})");
-                    return;
-                }
-                if (!resp.IsSuccessStatusCode)
-                {
-                    _log($"hub relay upload failed: HTTP {(int)resp.StatusCode}; re-keying");
-                    LoseBatch(batch);
-                    await Delay(ct);
-                    continue;
-                }
-                _bytesSent += body.Length;
-                _framesSent += batch.Count(r => r.Kind == RelayFraming.KindVideo);
-                if (!firstAccepted)
-                {
-                    firstAccepted = true;
-                    _log($"hub relay: first upload accepted ({body.Length} bytes)");
-                }
-            }
-            catch (OperationCanceledException) when (ct.IsCancellationRequested) { return; }
-            catch (Exception e)
-            {
-                _log($"hub relay upload failed: {e.Message}; re-keying");
                 LoseBatch(batch);
                 await Delay(ct);
+                continue;
             }
+            _bytesSent += body.Length;
+            _framesSent += batch.Count(r => r.Kind == RelayFraming.KindVideo);
+            if (!firstAccepted)
+            {
+                firstAccepted = true;
+                _log($"hub relay: first upload accepted ({body.Length} bytes)");
+            }
+        }
+    }
+
+    /// <summary>Everything queued since the last upload, or null if nothing was.</summary>
+    private List<(byte Kind, byte Flags, byte[] Payload)>? TakeBatch()
+    {
+        lock (_gate)
+        {
+            if (_queue.Count == 0) return null;
+            var batch = new List<(byte, byte, byte[])>(_queue);
+            _queue.Clear();
+            _queuedFrames = 0;
+            _queuedControl = 0;
+            return batch;
+        }
+    }
+
+    /// <summary>POST one batch. 409/404 is the hub saying this relay is gone, which ends the
+    /// session; any other failure loses the batch, which the caller recovers from with a
+    /// keyframe.</summary>
+    private async Task<UploadOutcome> UploadOnceAsync(byte[] body, CancellationToken ct)
+    {
+        try
+        {
+            using var content = new ByteArrayContent(body);
+            content.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
+            using var resp = await _http.PostAsync(_downUrl, content, ct);
+            if (resp.StatusCode is HttpStatusCode.Conflict or HttpStatusCode.NotFound)
+            {
+                End($"hub refused relay upload ({(int)resp.StatusCode})");
+                return UploadOutcome.Ended;
+            }
+            if (resp.IsSuccessStatusCode) return UploadOutcome.Sent;
+            _log($"hub relay upload failed: HTTP {(int)resp.StatusCode}; re-keying");
+            return UploadOutcome.Lost;
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            return UploadOutcome.Ended;
+        }
+        catch (Exception e)
+        {
+            _log($"hub relay upload failed: {e.Message}; re-keying");
+            return UploadOutcome.Lost;
         }
     }
 
@@ -209,33 +232,47 @@ public sealed class HubRelayClient : IRemoteMediaSink, IDisposable
         int after = 0;
         while (!ct.IsCancellationRequested)
         {
-            try
-            {
-                using var resp = await _http.GetAsync($"{_upUrl}?after={after}", ct);
-                if (resp.StatusCode == HttpStatusCode.NotFound)
-                {
-                    End("hub no longer knows this session");
-                    return;
-                }
-                if (!resp.IsSuccessStatusCode) { await Delay(ct); continue; }
-                var body = await resp.Content.ReadFromJsonAsync<UpResult>(cancellationToken: ct);
-                if (body is null) { await Delay(ct); continue; }
-                foreach (var message in body.Messages)
-                    if (!string.IsNullOrEmpty(message)) _onInput(message);
-                if (body.Next > after) after = body.Next;
-                if (body.State == "closed")
-                {
-                    End("hub closed the relay");
-                    return;
-                }
-            }
+            int? next;
+            try { next = await PollInputOnceAsync(after, ct); }
             catch (OperationCanceledException) when (ct.IsCancellationRequested) { return; }
             catch (Exception e)
             {
                 _log($"hub relay input poll failed: {e.Message}");
+                next = after;
                 await Delay(ct);
             }
+            if (next is null) return;   // the relay is gone; End has been raised
+            after = next.Value;
         }
+    }
+
+    /// <summary>One long-poll for the console's input. Hands each message to the input queue
+    /// and returns the new cursor, or null once the hub says the relay is gone. A refusal that
+    /// is not "gone" backs off and returns the cursor unchanged.</summary>
+    private async Task<int?> PollInputOnceAsync(int after, CancellationToken ct)
+    {
+        using var resp = await _http.GetAsync($"{_upUrl}?after={after}", ct);
+        if (resp.StatusCode == HttpStatusCode.NotFound)
+        {
+            End("hub no longer knows this session");
+            return null;
+        }
+        var body = resp.IsSuccessStatusCode
+            ? await resp.Content.ReadFromJsonAsync<UpResult>(cancellationToken: ct)
+            : null;
+        if (body is null)
+        {
+            await Delay(ct);
+            return after;
+        }
+        foreach (var message in body.Messages.Where(m => !string.IsNullOrEmpty(m)))
+            _onInput(message);
+        if (body.State == "closed")
+        {
+            End("hub closed the relay");
+            return null;
+        }
+        return Math.Max(after, body.Next);
     }
 
     private void End(string reason)

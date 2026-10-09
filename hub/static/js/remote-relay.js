@@ -167,41 +167,57 @@
             }
         }
 
+        // One long-poll. Resolves to {buffer, next, state}, to RETRY after a transient failure
+        // (already slept), or to GONE when the hub says this session is not ours any more -- a
+        // 404 is "gone or never yours", and not worth retrying.
+        const RETRY = 'retry';
+        const GONE = 'gone';
+        async function fetchBatch() {
+            abort = new AbortController();
+            let response;
+            try {
+                response = await fetch(opts.downUrl(after), { signal: abort.signal });
+            } catch (e) {
+                if (!stopped) await sleep(RETRY_MS);
+                return RETRY;
+            }
+            if (response.status === 404) return GONE;
+            if (!response.ok) {
+                await sleep(RETRY_MS);
+                return RETRY;
+            }
+            try {
+                return {
+                    buffer: await response.arrayBuffer(),
+                    next: Number.parseInt(response.headers.get('X-Relay-Next') || '', 10),
+                    state: response.headers.get('X-Relay-State'),
+                };
+            } catch (e) {
+                return RETRY;
+            }
+        }
+
+        const statusText = new TextDecoder();
+        function applyBatch(buffer) {
+            if (!waitingForKey && decoder.decodeQueueSize > MAX_DECODE_QUEUE) {
+                waitingForKey = true;
+                send({ t: 'key' });
+            }
+            for (const record of parseRecords(buffer)) {
+                if (record.kind === KIND_VIDEO) decodeVideo(record);
+                else if (record.kind === KIND_CONTROL) opts.onControl?.(statusText.decode(record.payload));
+            }
+        }
+
         async function downLoop() {
-            const decoderText = new TextDecoder();
             while (!stopped) {
-                abort = new AbortController();
-                let response;
-                try {
-                    response = await fetch(opts.downUrl(after), { signal: abort.signal });
-                } catch (e) {
-                    if (stopped) return;
-                    await sleep(RETRY_MS);
-                    continue;
-                }
-                if (!response.ok) {
-                    // 404 is "this session is gone or no longer yours" -- not worth retrying.
-                    if (response.status === 404) { finish(); return; }
-                    await sleep(RETRY_MS);
-                    continue;
-                }
-                const next = Number.parseInt(response.headers.get('X-Relay-Next') || '', 10);
-                const state = response.headers.get('X-Relay-State');
-                let buffer;
-                try { buffer = await response.arrayBuffer(); } catch (e) { continue; }
+                const batch = await fetchBatch();
                 if (stopped) return;
-                if (!waitingForKey && decoder.decodeQueueSize > MAX_DECODE_QUEUE) {
-                    waitingForKey = true;
-                    send({ t: 'key' });
-                }
-                for (const record of parseRecords(buffer)) {
-                    if (record.kind === KIND_VIDEO) decodeVideo(record);
-                    else if (record.kind === KIND_CONTROL && opts.onControl) {
-                        opts.onControl(decoderText.decode(record.payload));
-                    }
-                }
-                if (Number.isFinite(next)) after = next;
-                if (state === 'closed') { finish(); return; }
+                if (batch === GONE) { finish(); return; }
+                if (batch === RETRY) continue;
+                applyBatch(batch.buffer);
+                if (Number.isFinite(batch.next)) after = batch.next;
+                if (batch.state === 'closed') { finish(); return; }
             }
         }
 

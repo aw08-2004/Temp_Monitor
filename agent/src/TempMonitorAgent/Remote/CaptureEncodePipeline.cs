@@ -72,18 +72,24 @@ public sealed class CaptureEncodePipeline
         return frames;
     }
 
+    /// <summary>What the live session wants told about the stream: its shape whenever it
+    /// changes, and a capture that has stalled. Both optional, and grouped because they always
+    /// travel together -- to the viewer, through the same sink the frames go to.</summary>
+    public readonly record struct CaptureHooks(
+        Action<Geometry>? OnGeometry = null, Action<string>? OnStall = null);
+
     /// <summary>Stream captured, encoded frames to a sink until cancelled. Must run on a
     /// thread that owns <paramref name="binder"/> (see the class remarks).</summary>
     public static void RunToSink(
         IRemoteMediaSink sink, LiveStreamSettings settings, CancellationToken ct, Action<string> log,
         InputDesktopWatcher? desktops = null, ThreadDesktopBinder? binder = null,
-        Action<Geometry>? onGeometry = null, Action<string>? onStall = null)
+        CaptureHooks hooks = default)
     {
         RunLoop(settings,
             keepGoing: () => !ct.IsCancellationRequested,
             onEncoded: (bytes, durationRtp) => sink.SendFrame(bytes, durationRtp),
             log: log, ct: ct, desktops: desktops, binder: binder,
-            onGeometry: onGeometry, onStall: onStall);
+            onGeometry: hooks.OnGeometry, onStall: hooks.OnStall);
     }
 
     /// <summary>The shared loop. See the class remarks for why every change is a rebuild.</summary>
@@ -125,10 +131,11 @@ public sealed class CaptureEncodePipeline
 
                 if (session is null || desktopSwitched || settingsChanged || keyframeWanted)
                 {
-                    string reason = session is null ? "start"
-                                  : desktopSwitched ? $"desktop switch -> {binder?.AttachedName ?? "?"}"
-                                  : settingsChanged ? "settings change"
-                                  : "keyframe requested";
+                    string reason;
+                    if (session is null) reason = "start";
+                    else if (desktopSwitched) reason = $"desktop switch -> {binder?.AttachedName ?? "?"}";
+                    else if (settingsChanged) reason = "settings change";
+                    else reason = "keyframe requested";
                     session?.Dispose();
                     session = CaptureSession.Open(wanted, log);
                     if (session is null)

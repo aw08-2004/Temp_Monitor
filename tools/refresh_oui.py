@@ -71,7 +71,7 @@ def fetch(url):
         return response.read().decode("utf-8", errors="replace")
 
 
-def main(argv=None):
+def main(argv=None, out=OUT):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--from", dest="source_dir",
                         help="read oui.csv, mam.csv and oui36.csv from this directory")
@@ -93,10 +93,10 @@ def main(argv=None):
         # names off most of the fleet's sweeps.
         print(f"refusing to write: only {count} prefixes parsed")
         return 1
-    os.makedirs(os.path.dirname(OUT), exist_ok=True)
-    with open(OUT, "wb") as fh:
+    os.makedirs(os.path.dirname(out), exist_ok=True)
+    with open(out, "wb") as fh:
         fh.write(data)
-    print(f"wrote {OUT}: {count} prefixes, {len(data)} bytes")
+    print(f"wrote {out}: {count} prefixes, {len(data)} bytes")
     return 0
 
 

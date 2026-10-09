@@ -303,13 +303,15 @@ public static class RemoteHelper
                 Interlocked.Exchange(ref peerLostAt, 0);
                 return;
             }
-            if (state is RTCPeerConnectionState.failed or RTCPeerConnectionState.closed
-                      or RTCPeerConnectionState.disconnected)
+            // Only the FIRST loss starts the clock; a peer bouncing between failed states must
+            // not keep pushing the deadline back.
+            if ((state is RTCPeerConnectionState.failed or RTCPeerConnectionState.closed
+                       or RTCPeerConnectionState.disconnected)
+                && Interlocked.CompareExchange(ref peerLostAt, Environment.TickCount64, 0) == 0)
             {
-                if (Interlocked.CompareExchange(ref peerLostAt, Environment.TickCount64, 0) == 0)
-                    Log.Information("Peer {State}; waiting up to {Grace}s for the console to " +
-                                    "switch to the hub relay before ending the session.",
-                                    state, RelayGraceMs / 1000);
+                Log.Information("Peer {State}; waiting up to {Grace}s for the console to " +
+                                "switch to the hub relay before ending the session.",
+                                state, RelayGraceMs / 1000);
             }
         };
         peer.OnLocalIceCandidate += payload =>
@@ -354,8 +356,8 @@ public static class RemoteHelper
             using var binder = new ThreadDesktopBinder("capture", m => Log.Information("{Msg}", m));
             CaptureEncodePipeline.RunToSink(
                 router, settings, cts.Token, m => Log.Information("{Msg}", m),
-                desktops, binder,
-                onGeometry: g =>
+                desktops, binder, new CaptureEncodePipeline.CaptureHooks(
+                OnGeometry: g =>
                 {
                     pendingGeometry.Set(g);
                     // Through the router, not the peer: on the relay this is how the viewer
@@ -373,7 +375,7 @@ public static class RemoteHelper
                         monitors = g.MonitorCount,
                     }));
                 },
-                onStall: desktop =>
+                OnStall: desktop =>
                 {
                     Log.Warning("Capture has produced nothing for several seconds on desktop {Desktop}",
                                 string.IsNullOrEmpty(desktop) ? "?" : desktop);
@@ -383,7 +385,7 @@ public static class RemoteHelper
                         state = "stalled",
                         desktop,
                     }));
-                });
+                }));
         }, cts);
 
         var inputThread = StartThread("remote-input",

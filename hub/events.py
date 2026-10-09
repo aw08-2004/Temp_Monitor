@@ -633,6 +633,52 @@ def _normalize(entry, now):
     }
 
 
+def _store_record(conn, machine, record, now):
+    """Roll one normalised record into an existing row, or insert it. Returns True if it was
+    inserted as a new row, False if it was rolled into one."""
+    # Proximity is tested in BOTH directions, not just backwards. The obvious version -- "is
+    # there a row whose last occurrence is within the window before this one" -- is right for
+    # records arriving in order and wrong for the case this feature has to survive: a machine
+    # back from a day offline reports a day of events, and a record from yesterday morning
+    # would otherwise be rolled into a row from this afternoon and drag its `first_seen` back
+    # twenty hours. The count would still be right and the window would be a lie.
+    window = ROLLUP_WINDOW_SECONDS
+    existing = conn.execute(
+        """
+        SELECT id, count, first_seen, last_seen FROM machine_events
+         WHERE machine = ? AND rollup_key = ?
+           AND last_seen >= ? AND first_seen <= ?
+         ORDER BY last_seen DESC LIMIT 1
+        """,
+        (machine, record["rollup_key"],
+         record["occurred_at"] - window, record["occurred_at"] + window),
+    ).fetchone()
+    if existing:
+        conn.execute(
+            """
+            UPDATE machine_events
+               SET count = count + 1,
+                   first_seen = MIN(first_seen, ?),
+                   last_seen = MAX(last_seen, ?)
+             WHERE id = ?
+            """,
+            (record["occurred_at"], record["occurred_at"], existing["id"]),
+        )
+        return False
+    conn.execute(
+        """
+        INSERT INTO machine_events
+            (id, machine, log, provider, event_id, level, message,
+             rollup_key, count, first_seen, last_seen, recorded_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)
+        """,
+        (uuid.uuid4().hex, machine, record["log"], record["provider"],
+         record["event_id"], record["level"], record["message"],
+         record["rollup_key"], record["occurred_at"], record["occurred_at"], now),
+    )
+    return True
+
+
 def record_events(db_path, machine, payload):
     """Store what one machine's heartbeat carried. Returns (stored, rolled_up).
 
@@ -682,49 +728,10 @@ def record_events(db_path, machine, payload):
             record = _normalize(entry, now)
             if record is None:
                 continue
-            # Proximity is tested in BOTH directions, not just backwards. The obvious
-            # version -- "is there a row whose last occurrence is within the window before
-            # this one" -- is right for records arriving in order and wrong for the case
-            # this feature has to survive: a machine back from a day offline reports a day
-            # of events, and a record from yesterday morning would otherwise be rolled into
-            # a row from this afternoon and drag its `first_seen` back twenty hours. The
-            # count would still be right and the window would be a lie.
-            window = ROLLUP_WINDOW_SECONDS
-            existing = conn.execute(
-                """
-                SELECT id, count, first_seen, last_seen FROM machine_events
-                 WHERE machine = ? AND rollup_key = ?
-                   AND last_seen >= ? AND first_seen <= ?
-                 ORDER BY last_seen DESC LIMIT 1
-                """,
-                (machine, record["rollup_key"],
-                 record["occurred_at"] - window, record["occurred_at"] + window),
-            ).fetchone()
-            if existing:
-                conn.execute(
-                    """
-                    UPDATE machine_events
-                       SET count = count + 1,
-                           first_seen = MIN(first_seen, ?),
-                           last_seen = MAX(last_seen, ?)
-                     WHERE id = ?
-                    """,
-                    (record["occurred_at"], record["occurred_at"], existing["id"]),
-                )
+            if _store_record(conn, machine, record, now):
+                stored += 1
+            else:
                 rolled += 1
-                continue
-            conn.execute(
-                """
-                INSERT INTO machine_events
-                    (id, machine, log, provider, event_id, level, message,
-                     rollup_key, count, first_seen, last_seen, recorded_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)
-                """,
-                (uuid.uuid4().hex, machine, record["log"], record["provider"],
-                 record["event_id"], record["level"], record["message"],
-                 record["rollup_key"], record["occurred_at"], record["occurred_at"], now),
-            )
-            stored += 1
 
         # The state row is written on EVERY report, including the empty ones. That is the
         # whole reason it exists -- see init_events_db.
