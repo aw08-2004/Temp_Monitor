@@ -1,0 +1,104 @@
+name: "Hub image"
+
+# Builds the hub's container image (hub/Dockerfile) and publishes it to GHCR. A container hub
+# never updates itself -- HUB_UPDATE_MODE=image -- so this workflow IS the hub's release path
+# for every hub that runs under Docker: a push to main that bumps HUB_VERSION becomes a tag an
+# operator can `docker compose pull`.
+#
+#   main -> ghcr.io/<owner>/temp_monitor-hub:X.Y.Z  and :latest
+#   beta -> ghcr.io/<owner>/temp_monitor-hub:beta-X.Y.Z  and :beta
+#
+# Beta gets its own prefix rather than sharing X.Y.Z, because promoting beta to main carries
+# the same HUB_VERSION across -- a shared tag would make main's build collide with beta's.
+#
+# **It refuses a version tag that already exists.** Every updater in this project asks "is the
+# other side strictly newer", so a reused HUB_VERSION is a release that silently reaches
+# nobody (VERSIONING.md; it has bitten twice). Overwriting the tag would be worse: two
+# different images under one version. Pull requests only build, to catch a broken
+# Dockerfile or requirements.txt before it reaches main.
+#
+# The package is meant to be PUBLIC, like this repository, so a hub host pulls without a login.
+# GitHub creates every new package private, and visibility cannot be set from a workflow (there
+# is no API for it). The first publish is therefore followed by a one-time, one-way switch in
+# the package's settings: Danger Zone -> Change visibility -> Public. ROADMAP.MD owes it.
+
+on:
+  push:
+    branches: [main, beta]
+    paths:
+      - "hub/**"
+      - ".github/workflows/hub-image.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "hub/**"
+      - ".github/workflows/hub-image.yml"
+
+concurrency:
+  group: hub-image-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  image:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Read HUB_VERSION
+        id: version
+        run: |
+          # The same pattern as app.parse_hub_version, so this reads exactly what the hubs
+          # compare -- and then the stricter rule from CLAUDE.md: three numeric components.
+          v=$(grep -oP '^HUB_VERSION\s*=\s*["\x27]\K[\d.]+(?=["\x27])' hub/app.py | head -n1)
+          if ! [[ "$v" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::HUB_VERSION '$v' is not MAJOR.MINOR.PATCH"
+            exit 1
+          fi
+          owner=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          image="ghcr.io/${owner}/temp_monitor-hub"
+          if [[ "${{ github.ref_name }}" == "beta" ]]; then
+            tags="${image}:beta-${v},${image}:beta"
+            version_tag="${image}:beta-${v}"
+          else
+            tags="${image}:${v},${image}:latest"
+            version_tag="${image}:${v}"
+          fi
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "tags=$tags" >> "$GITHUB_OUTPUT"
+          echo "version_tag=$version_tag" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to GHCR
+        if: github.event_name == 'push'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Refuse a version that was already published
+        if: github.event_name == 'push'
+        run: |
+          if docker manifest inspect "${{ steps.version.outputs.version_tag }}" > /dev/null 2>&1; then
+            echo "::error::${{ steps.version.outputs.version_tag }} already exists. Bump HUB_VERSION in hub/app.py -- a reused number is a release no hub will install."
+            exit 1
+          fi
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build (and push on main or beta)
+        uses: docker/build-push-action@v6
+        with:
+          context: hub
+          file: hub/Dockerfile
+          push: ${{ github.event_name == 'push' }}
+          tags: ${{ steps.version.outputs.tags }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.version=${{ steps.version.outputs.version }}
+            org.opencontainers.image.revision=${{ github.sha }}

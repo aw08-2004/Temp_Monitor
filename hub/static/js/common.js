@@ -567,7 +567,10 @@ function initHubUpdate() {
             return;
         }
 
-        els.action.hidden = false;
+        // A container hub is updated by pulling its image, never from here: the POST would
+        // only be refused, so there is no button to press.
+        const imageMode = data.update_mode === 'image';
+        els.action.hidden = imageMode;
         els.dismiss.hidden = false;
 
         if (data.status === 'failed') {
@@ -583,7 +586,9 @@ function initHubUpdate() {
         // auto_update on means the watcher will install this without anyone's help --
         // announcing it would be noise, and the "Update now" button a race.
         const relevant = data.update_available && !data.auto_update;
-        els.text.textContent = t('hub_update.available', { version: latest });
+        els.text.textContent = imageMode
+            ? t('hub_update.available_image', { version: latest })
+            : t('hub_update.available', { version: latest });
         els.notice.hidden = !relevant || dismissedVersion() === latest;
     }
 

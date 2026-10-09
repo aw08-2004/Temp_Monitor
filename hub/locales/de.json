@@ -45,6 +45,7 @@
   },
   "hub_update": {
     "available": "Hub v{version} ist verfügbar",
+    "available_image": "Hub v{version} ist verfügbar. Zum Aktualisieren das neue Container-Image laden.",
     "update_now": "Jetzt aktualisieren",
     "dismiss": "Ausblenden",
     "updating": "Aktualisierung läuft… der Hub startet gleich neu.",

@@ -64,6 +64,12 @@ def _self_heal_missing_modules(exc):
     # at the worktree root, one level up from this hub/ code dir.
     if os.path.isdir(os.path.join(_WORKTREE_ROOT, ".git")):
         return False
+    # Same in a container image (app.py's HUB_UPDATE_MODE, read here directly for the reason
+    # in the module docstring): the image is the release, so a missing module is a build bug
+    # that must fail the container loudly. Patching it from main would leave a container
+    # running code that is neither the image's version nor main's, gone again on recreate.
+    if os.environ.get("HUB_UPDATE_MODE", "").strip().lower() == "image":
+        return False
     print(f"[wsgi] '{exc}' on startup import; attempting one-shot self-heal from the archive.",
           file=sys.stderr)
     import io

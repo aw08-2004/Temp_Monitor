@@ -1,0 +1,10 @@
+# Keep the build context to the code. A dev checkout's hub/ can also hold a self-update's
+# leftovers and byte-compiled files, none of which belong in an image.
+__pycache__/
+**/__pycache__/
+*.pyc
+hub.prev/
+hub.new/
+.env
+Dockerfile
+.dockerignore

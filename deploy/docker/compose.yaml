@@ -1,0 +1,41 @@
+# FleetHub hub under Docker Compose. Works on Docker Engine (Linux) and Docker Desktop.
+#
+#   docker compose -f deploy/docker/compose.yaml up -d
+#
+# Updating is pull + recreate -- the hub never updates itself inside a container (see
+# hub/Dockerfile):
+#
+#   docker compose -f deploy/docker/compose.yaml pull
+#   docker compose -f deploy/docker/compose.yaml up -d
+#
+# Pin HUB_TAG to a version (HUB_TAG=1.143.0) to choose when a release goes in; "latest"
+# follows main, "beta" follows the beta branch. Deploy order is unchanged: hub first, agent
+# releases after.
+name: fleethub
+
+services:
+  hub:
+    image: ghcr.io/aw08-2004/temp_monitor-hub:${HUB_TAG:-latest}
+    container_name: fleethub-hub
+    # Exactly one replica, ever: the schedulers, db_writer and Socket.IO state are in-process.
+    restart: unless-stopped
+    volumes:
+      # A named volume rather than a bind mount by default: SQLite on a Docker Desktop bind
+      # mount (Windows or macOS host paths) is slow and its file locking is not reliable.
+      # On a Linux host a bind mount is fine -- e.g. `- /srv/fleethub:/state`, owned by uid
+      # 10001.
+      - fleethub-state:/state
+    ports:
+      # Loopback only: TLS is terminated in front of the hub (Cloudflare tunnel, nginx), and
+      # ProxyFix trusts exactly one hop. Publish on 0.0.0.0 only if that proxy is on another
+      # host.
+      - "127.0.0.1:3001:3001"
+    # Uncomment on a LINUX host (and drop `ports:`) if the hub must send Wake-on-LAN packets
+    # itself. On the default bridge network the hub is never on a target's subnet, so only
+    # the agent-relayed wake works -- which is the primary path anyway. Docker Desktop's
+    # host networking is not the physical LAN and does not help.
+    # network_mode: host
+    stop_grace_period: 30s
+
+volumes:
+  fleethub-state:
