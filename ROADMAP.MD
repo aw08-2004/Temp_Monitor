@@ -278,6 +278,13 @@ seen on a real desktop with `--recording-badge-test`. Still owed:
 - **A real recording end to end:** start, extend at the countdown, switch PCs on the Remote
   page, stop; play and download it from Recordings; share it with a group and check a member
   can watch and a non-member cannot.
+- **First real attempt failed (reported 2026-10-09):** "Recording failed: the PC could not show
+  the recording badge" on AIO-HOBBY, three times in a row. The helper reported `failed` with
+  *could not attach to the input desktop (win32 170)*, which is `ERROR_BUSY` from
+  `SetThreadDesktop`. The hub had discarded that reason; it was recovered from
+  `remote_signals`. From hub 1.143.0 the reason is kept on the recording (`end_detail`), shown
+  after the message and written to the `recording_end` audit entry. That makes the next
+  failure diagnosable from the console instead of from the database.
 
 **7. Hub in Docker (#28), owed on the hub host.** Image, compose file and publishing workflow
 built 2026-10-09 (hub 1.143.0). The image was built and run locally against a scratch volume:

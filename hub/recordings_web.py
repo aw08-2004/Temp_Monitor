@@ -109,7 +109,7 @@ class _RecordingRoutes:
     def public(self, rec, *, owned):
         out = {k: rec[k] for k in (
             "id", "machine", "owner", "reason", "status", "created_at", "confirmed_at",
-            "deadline", "extensions", "ended_at", "end_reason", "size_bytes",
+            "deadline", "extensions", "ended_at", "end_reason", "end_detail", "size_bytes",
             "duration_seconds")}
         # Only the owner sees who else may watch it: they are the only one who can change it.
         if owned:

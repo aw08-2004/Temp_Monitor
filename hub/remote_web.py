@@ -171,9 +171,17 @@ def create_remote_blueprint(db_path, login_required, access, env_path=None):
                                        actor=machine)
         elif kind == "recording":
             # The helper's answer to a `record` signal: whether the badge is on screen.
+            # A `failed` carries the helper's reason and the desktop it was on; keep them, or
+            # the console can only say "could not show the badge" and never why.
             payload = data.get("payload") if isinstance(data.get("payload"), dict) else {}
+            error, desktop = payload.get("error"), payload.get("desktop")
+            detail = None
+            if isinstance(error, str) and error.strip():
+                detail = error.strip()
+                if isinstance(desktop, str) and desktop.strip():
+                    detail += f" (desktop {desktop.strip()})"
             recordings.confirm_badge(db_path, str(payload.get("recording_id") or ""),
-                                     machine, str(payload.get("badge") or ""))
+                                     machine, str(payload.get("badge") or ""), detail=detail)
         try:
             seq = remote.add_signal(db_path, session_id, remote.SENDER_AGENT, kind,
                                     data.get("payload"))
