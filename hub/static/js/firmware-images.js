@@ -148,12 +148,17 @@
     }
 
     async function deleteImage(image) {
-        if (!window.confirm(t('firmware.confirm_delete', { name: image.name }))) return;
+        if (!await confirmDialog({
+            title: t('firmware.confirm_delete_title'),
+            message: t('firmware.confirm_delete', { name: image.name }),
+            confirmLabel: t('common.delete'),
+            danger: true,
+        })) return;
         try {
             await api(`/api/firmware/payloads/${encodeURIComponent(image.id)}`,
                       { method: 'DELETE' });
         } catch (e) {
-            window.alert(e.message);
+            toast(e.message, { kind: 'error' });
             return;
         }
         await loadAll();
@@ -277,7 +282,7 @@
                                     headers: { 'Content-Type': 'application/json' },
                                     body: '{}' });
                     } catch (e) {
-                        window.alert(e.message);
+                        toast(e.message, { kind: 'error' });
                     }
                     await loadAll();
                 });
@@ -291,7 +296,13 @@
     }
 
     async function cancelJob(job) {
-        if (!window.confirm(t('firmware.confirm_cancel_job'))) return;
+        if (!await confirmDialog({
+            title: t('firmware.confirm_cancel_job_title'),
+            message: t('firmware.confirm_cancel_job'),
+            confirmLabel: t('firmware.confirm_cancel_job_ok'),
+            cancelLabel: t('dialog.keep_running'),
+            danger: true,
+        })) return;
         let answer;
         try {
             answer = await api(`/api/firmware/jobs/${encodeURIComponent(job.id)}/cancel`,
@@ -299,20 +310,27 @@
                                  headers: { 'Content-Type': 'application/json' },
                                  body: '{}' });
         } catch (e) {
-            window.alert(e.message);
+            toast(e.message, { kind: 'error' });
             return;
         }
         // Both numbers, always. A job cancelled while machines are already flashing has
         // stopped nothing for those machines, and saying otherwise would be the console
         // lying at the worst possible moment.
+        // One dialog carrying whichever of the two applies, rather than two in a row: they
+        // are halves of the same answer, and the second used to be read as an afterthought.
+        const caveats = [];
         if (answer.still_flashing) {
-            window.alert(t('firmware.cancel_partial', { count: answer.still_flashing }));
+            caveats.push(t('firmware.cancel_partial', { count: answer.still_flashing }));
         }
         // Separate from the above: a staged image waiting on a restart is not being written
         // to, and telling an operator it was sent them looking for a flash that was not
         // happening. It resolves by itself once the machine restarts.
         if (answer.awaiting_reboot) {
-            window.alert(t('firmware.cancel_awaiting_reboot', { count: answer.awaiting_reboot }));
+            caveats.push(t('firmware.cancel_awaiting_reboot', { count: answer.awaiting_reboot }));
+        }
+        if (caveats.length) {
+            noticeDialog({ title: t('firmware.cancel_result_title'),
+                           message: caveats.join('\n\n') });
         }
         await loadAll();
     }

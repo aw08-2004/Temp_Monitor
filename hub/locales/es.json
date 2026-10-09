@@ -102,6 +102,7 @@
     "edit": "Editar",
     "delete": "Eliminar",
     "confirm_delete": "¿Eliminar el grupo de dispositivos «{name}»?\n\nLas implementaciones ya creadas no se ven afectadas y no cambia nada en ningún PC.",
+    "confirm_delete_title": "Eliminar grupo de dispositivos",
     "no_permission": "Solo quien tenga el permiso Gestionar grupos de dispositivos puede crear o cambiar grupos.",
     "pick": "Elige un grupo…",
     "none_defined": "Todavía no hay grupos de dispositivos.",
@@ -110,6 +111,13 @@
   },
   "toast": {
     "dismiss": "Cerrar"
+  },
+  "dialog": {
+    "ok": "Aceptar",
+    "confirm_title": "¿Está seguro?",
+    "notice_title": "Tenga en cuenta",
+    "error_title": "Algo salió mal",
+    "keep_running": "Dejar en marcha"
   },
   "login": {
     "title": "Iniciar sesión",
@@ -269,6 +277,7 @@
       "other": "{visible} de {count} equipos"
     },
     "confirm_delete": "¿Eliminar «{machine}» de forma permanente?\n\nEsto borra su identidad, todo su historial de temperatura y su inscripción en la flota. No se puede deshacer.",
+    "confirm_delete_title": "Eliminar equipo",
     "delete_failed": "No se pudo eliminar «{machine}»: {error}",
     "load_failed": "No se pudo cargar el inventario.",
     "wake_all": "Encender los PC apagados",
@@ -337,6 +346,7 @@
         "one": "¿Conservar «{survivor}» y fusionar «{victim}» en él?\n\nEl historial de temperatura de los equipos fusionados pasa a «{survivor}»; sus registros duplicados y sus inscripciones en la flota se eliminan. No se puede deshacer.",
         "other": "¿Conservar «{survivor}» y fusionar {count} equipos en él?\n\nEl historial de temperatura de los equipos fusionados pasa a «{survivor}»; sus registros duplicados y sus inscripciones en la flota se eliminan. No se puede deshacer."
       },
+      "confirm_title": "Fusionar equipos duplicados",
       "merge_failed": "No se pudo fusionar: {error}"
     },
     "unknown_kind": "Alerta de un tipo no reconocido ({kind})",
@@ -464,6 +474,8 @@
     },
     "email_required": "Se requiere una dirección de correo electrónico.",
     "confirm_delete": "¿Quitar a «{user}» del directorio?\n\nEsto solo elimina su perfil. NO cambia lo que puede hacer ni si puede iniciar sesión: eso lo definen sus grupos de permisos.",
+    "confirm_delete_title": "Quitar usuario",
+    "confirm_delete_ok": "Quitar",
     "delete_failed": "No se pudo eliminar «{email}»: {error}",
     "load_failed": "No se pudieron cargar los usuarios: {error}",
     "views_nav": "Vistas de usuarios",
@@ -497,6 +509,7 @@
     },
     "revoke": "Revocar",
     "confirm_delete": "¿Eliminar la invitación \"{label}\"? Quien ya se haya unido a través de ella conserva su acceso -- quítelo del grupo de permisos para revocarlo.",
+    "confirm_delete_title": "Eliminar invitación",
     "editor": {
       "title": "Nuevo enlace de invitación",
       "label": "Etiqueta",
@@ -567,6 +580,7 @@
       "one": "¿Eliminar el grupo de permisos «{group}»?\n\n{count} miembro perderá el acceso que concedía. Quien se quede sin ningún grupo ya no podrá iniciar sesión.",
       "other": "¿Eliminar el grupo de permisos «{group}»?\n\n{count} miembros perderán el acceso que concedía. Quien se quede sin ningún grupo ya no podrá iniciar sesión."
     },
+    "confirm_delete_title": "Eliminar grupo de permisos",
     "confirm_delete_directory": {
       "one": "¿Eliminar el grupo de permisos «{group}»?\n\n{members}, y quien pertenezca a {count} grupo de directorio asignado, perderán el acceso que concedía. Quien se quede sin ningún grupo ya no podrá iniciar sesión.",
       "other": "¿Eliminar el grupo de permisos «{group}»?\n\n{members}, y quien pertenezca a {count} grupos de directorio asignados, perderán el acceso que concedía. Quien se quede sin ningún grupo ya no podrá iniciar sesión."
@@ -1349,6 +1363,7 @@
       "key_save": "Guardar clave",
       "key_remove": "Quitar clave",
       "key_remove_confirm": "¿Quitar la clave de API? Los proveedores alojados dejarán de responder hasta que se guarde una nueva.",
+      "key_remove_confirm_title": "Quitar clave de API",
       "key_saved": "Clave guardada. Surte efecto de inmediato.",
       "key_removed": "Clave quitada.",
       "key_cannot_write": "Este concentrador no puede escribir su archivo .env, así que la clave debe definirse como AI_API_KEY en el servidor."
@@ -1526,6 +1541,8 @@
       "save": "Guardar la configuración de inicio de sesión",
       "no_provider_left": "Así no quedaría ninguna forma de iniciar sesión en este hub. Configura Google o un proveedor OIDC antes de guardar.",
       "confirm": "¿Cambiar cómo inicia sesión la gente en este hub?\n\nSurte efecto de inmediato para los nuevos inicios de sesión. Las sesiones existentes no se cierran. Si la nueva configuración es incorrecta, los administradores de emergencia de ALLOWED_EMAILS pueden revertirla, siempre que aún puedan iniciar sesión.",
+      "confirm_title": "Cambiar la configuración de inicio de sesión",
+      "confirm_ok": "Aplicar cambios",
       "applying": "Aplicando…",
       "saved_changed": "Guardado. Actualizado: {fields}",
       "saved_unchanged": "No hay cambios que guardar."
@@ -1607,6 +1624,7 @@
     "detect_version_min": "{name} ≥ {version}",
     "deploy": "Desplegar",
     "confirm_delete": "¿Eliminar el paquete «{package}»? El historial de despliegues se conserva.",
+    "confirm_delete_title": "Eliminar paquete",
     "http_413": "La subida se rechazó por ser demasiado grande (HTTP 413) antes de llegar al hub. Ha sido el proxy inverso que está delante del hub, no el límite propio del hub: aumenta client_max_body_size en nginx (o su equivalente: maxAllowedContentLength en IIS, LimitRequestBody en Apache) y recárgalo.",
     "http_502": "El hub no respondió (HTTP {status}). Una subida grande también puede agotar el tiempo de lectura del proxy: revisa el registro del proxy además del del hub.",
     "http_other": "HTTP {status}",
@@ -1744,6 +1762,8 @@
       "retry_failures": "Reintentar los fallos",
       "cancel": "Cancelar el despliegue",
       "confirm_cancel": "¿Detener este despliegue? Los equipos que ya están ejecutando el instalador lo terminarán.",
+      "confirm_cancel_title": "Detener implementación",
+      "confirm_cancel_ok": "Detener implementación",
       "target_col": {
         "machine": "Equipo",
         "status": "Estado",
@@ -1841,6 +1861,7 @@
       "import_empty": "Pega la clave que quieres que use este hub.",
       "import_replace_warning": "Esto reemplaza la clave {id}. Las copias hechas con ella solo se podrán leer volviendo a importarla, así que asegúrate de conservarla.",
       "import_stranded": "La clave se importó, pero {count} destino(s) tienen credenciales que este hub ya no puede leer. Abre cada uno y vuelve a introducir sus credenciales, o su próxima copia fallará.",
+      "import_stranded_title": "Se necesitan credenciales de destino",
       "unescrowed_title": "La clave de cifrado nunca se ha guardado en ningún otro sitio",
       "unescrowed_text": "Si se pierde este servidor, todas las copias que ha hecho quedan ilegibles para siempre. Revela la clave, guárdala en un gestor de contraseñas o en un sobre sellado, y confírmalo.",
       "reveal": "Revelar la clave",
@@ -1977,6 +1998,7 @@
       "stored": "guardadas",
       "missing": "FALTAN",
       "confirm_delete": "¿Eliminar el destino «{name}»? Las copias ya subidas allí NO se borran, pero el hub dejará de poder llegar a ellas.",
+      "confirm_delete_title": "Eliminar destino",
       "editor": {
         "new_title": "Nuevo destino",
         "edit_title": "Editar {name}",
@@ -2080,6 +2102,8 @@
       "menu_untick": "Desmarcar",
       "actions_for": "Acciones para {path}",
       "confirm_restore": "¿Restaurar {count} elemento(s) a sus ubicaciones ORIGINALES en {machine}?\n\nLos archivos que haya allí se reemplazarán{qualifier}",
+      "confirm_restore_title": "Restaurar en las ubicaciones originales",
+      "confirm_restore_ok": "Restaurar",
       "confirm_overwrite_all": ".",
       "confirm_overwrite_missing": " solo donde ya no existan.",
       "queued": "En cola: {files} archivo(s) de {archives} archivo(s) comprimido(s).",
@@ -2443,6 +2467,7 @@
       "shared_by": "compartido por {who}",
       "use": "Usar",
       "confirm_delete": "¿Eliminar el favorito «{name}»?",
+      "confirm_delete_title": "Eliminar favorito",
       "group": "{title} ({count})",
       "mine": "Míos",
       "shared_with_me": "Compartidos conmigo",
@@ -2729,11 +2754,15 @@
     "deleted_image": "Imagen eliminada",
     "flash_button": "Flashear…",
     "confirm_delete": "¿Eliminar la imagen {name}? Los equipos ya actualizados con ella no se ven afectados.",
+    "confirm_delete_title": "Eliminar imagen de firmware",
     "confirm_cancel_job": "¿Cancelar esta actualización? Los equipos que ya recibieron la imagen terminarán de flashear.",
+    "confirm_cancel_job_title": "Cancelar actualización de firmware",
+    "confirm_cancel_job_ok": "Cancelar actualización",
     "cancel_job": "Cancelar actualización",
     "cancel_target": "Cancelar",
     "cancel_partial": "{count} equipo(s) ya habían recibido la imagen y terminarán de flashear.",
     "cancel_awaiting_reboot": "{count} equipo(s) tienen la imagen preparada y esperan un reinicio. Se resuelven solos al reiniciar: aplicada si aparece la nueva versión de BIOS, fallida si no.",
+    "cancel_result_title": "Actualización cancelada",
     "target_exit_code": "Código de salida de la herramienta de actualización {code}",
     "target_bitlocker": "BitLocker: {state}",
     "target_tool_log": "Registro de la herramienta de actualización",
@@ -2831,6 +2860,8 @@
     "unnamed": "Dispositivo sin nombre",
     "revoked": "Revocado",
     "confirm_revoke": "¿Revocar {device}? La aplicación dejará de funcionar de inmediato.",
+    "confirm_revoke_title": "Revocar dispositivo",
+    "confirm_revoke_ok": "Revocar",
     "col": {
       "device": "Dispositivo",
       "owner": "Conectado como",
@@ -2873,6 +2904,7 @@
     "matching": "coincidiendo ahora",
     "targets": "PC seleccionados",
     "confirm_delete": "¿Eliminar esta regla y su historial?",
+    "confirm_delete_title": "Eliminar regla",
     "actions_disabled": "Las reglas se evalúan, pero sus acciones están desactivadas en toda la flota.",
     "commands_disabled": "Las acciones de comando están desactivadas en toda la flota, por lo que esta regla se evaluará pero no emitirá ningún comando, incluido aquel al que dirija la respuesta de un mensaje, como reiniciar después de que el usuario pulse Sí. Active «acciones de comando habilitadas» en Configuración → Reglas para permitirlo.",
     "section_target": "Qué PC",
@@ -3094,6 +3126,9 @@
       "ok_cancel": "Aceptar / Cancelar",
       "yes_no": "Sí / No",
       "yes_no_later": "Sí / No / Más tarde",
+      "yes_later": "Sí / Más tarde",
+      "no_later": "No / Más tarde",
+      "ok_later": "Aceptar / Más tarde",
       "accept_decline": "Aceptar / Rechazar",
       "acknowledge_only": "Solo confirmar"
     },
@@ -3310,6 +3345,7 @@
     "disable": "Desactivar",
     "delete": "Eliminar",
     "delete_confirm": "¿Eliminar el vigilante «{name}»? Las máquinas dejarán de vigilar en su próximo latido.",
+    "delete_confirm_title": "Eliminar watchdog",
     "show_state": "Máquinas",
     "state_title": "{name} -- {service}",
     "state_help": "Lo último que informó cada máquina. Una máquina alcanzada que no aparezca aquí aún no ha recogido el vigilante.",
@@ -3452,6 +3488,7 @@
     "body": "Script",
     "body_help": "Se ejecuta como SYSTEM. Use {{sys.machine}} para los valores del propio equipo y {{input.nombre}} para un valor que aporte la regla.",
     "confirm_delete": "¿Eliminar este script?",
+    "confirm_delete_title": "Eliminar script",
     "delete": "Eliminar",
     "delete_failed": "No se pudo eliminar: {error}",
     "description": "Descripción",
@@ -3799,7 +3836,8 @@
       "every_day": "Todos los días",
       "summary": "{start} durante {minutes} min",
       "disabled": "Desactivada",
-      "confirm_delete": "¿Eliminar la ventana de mantenimiento {name}?"
+      "confirm_delete": "¿Eliminar la ventana de mantenimiento {name}?",
+      "confirm_delete_title": "Eliminar ventana de mantenimiento"
     },
     "run": {
       "new": "Ejecutar parches",
@@ -3812,10 +3850,13 @@
       "emergency_help": "Ignora todas las ventanas de mantenimiento e instala en cuanto cada equipo esté accesible. Estos equipos pueden reiniciarse durante la jornada laboral.",
       "emergency_badge": "Emergencia",
       "confirm_emergency": "¿Instalar ahora en {count} equipo(s), ignorando toda ventana de mantenimiento? Pueden reiniciarse durante la jornada laboral.",
+      "confirm_emergency_title": "Instalación de emergencia",
+      "confirm_emergency_ok": "Instalar ahora",
       "start": "Iniciar ejecución",
       "progress": "{done} de {total}",
       "cancel": "Cancelar",
       "cancelled": "Cancelada. Se retiraron {recalled} equipo(s); los que ya se estaban reiniciando se dejaron en paz, porque los parches ya están en ellos.",
+      "cancelled_title": "Ejecución cancelada",
       "retry": "Reintentar los fallos"
     }
   },
@@ -3885,7 +3926,8 @@
       "disable": "Desactivar",
       "none": "En este hub no se recopila nada.",
       "none_manage": "Todavía no se recopila nada. Añada una suscripción para indicar qué registros de eventos debe enviar la flota.",
-      "confirm_delete": "¿Dejar de recopilar \"{name}\"? Los eventos ya recopilados se conservan."
+      "confirm_delete": "¿Dejar de recopilar \"{name}\"? Los eventos ya recopilados se conservan.",
+      "confirm_delete_title": "Eliminar suscripción"
     }
   },
   "channels": {
@@ -3912,6 +3954,7 @@
     "borrowed_badge": "Prestado",
     "revoke": "Dejar de compartir",
     "confirm_revoke": "¿Dejar de compartir {machine} con {hub}? Cualquier sesión que tengan abierta en él terminará de inmediato.",
+    "confirm_revoke_title": "Dejar de compartir el equipo",
     "lending": {
       "heading": "Equipos que prestamos",
       "intro": "Cada fila es un equipo, prestado a un concentrador, con exactamente los permisos marcados. Nada se añade solo: un concentrador con control remoto no ve la telemetría del equipo salvo que también se le haya concedido.",
@@ -3939,6 +3982,7 @@
       "generate": "Generar código",
       "unpair": "Desemparejar",
       "confirm_unpair": "¿Desemparejar {hub}? Su credencial deja de servir de inmediato y se retiran todos los equipos compartidos con él ({count}).",
+      "confirm_unpair_title": "Desemparejar hub",
       "calls_itself": "Se llama a sí mismo «{name}»",
       "no_peers": "Ningún otro concentrador está emparejado con este.",
       "no_peers_hint": "Invite a un concentrador para obtener un código de un solo uso y déselo a quien lo administre.",
@@ -3948,6 +3992,7 @@
       "pair": "Emparejar",
       "remove": "Quitar",
       "confirm_remove": "¿Quitar {hub}? Se olvidan su dirección, su credencial y los equipos que prestaba. Esto NO desempareja este concentrador en su extremo: pídales que lo revoquen también allí.",
+      "confirm_remove_title": "Quitar hub",
       "no_links": "Ningún otro concentrador presta a este.",
       "no_links_hint": "Pídales que inviten a este concentrador y pegue el código que le den.",
       "no_token": "Su credencial no se puede leer. Quite el concentrador y emparejélo de nuevo.",
@@ -4056,6 +4101,7 @@
       "uploaded_ok": "Subido.",
       "remove": "Dejar de servirlo",
       "remove_confirm": "¿Dejar de servir este APK? Los códigos ya impresos dejarán de funcionar.",
+      "remove_confirm_title": "Dejar de alojar el APK",
       "failed": "Se ha rechazado.",
       "file_name": "Archivo",
       "size": "Tamaño",
@@ -4144,6 +4190,7 @@
     "edit": "Editar",
     "delete": "Eliminar",
     "confirm_delete": "¿Eliminar la política «{name}»? A los dispositivos que cubre se les levantarán sus restricciones en la siguiente comunicación.",
+    "confirm_delete_title": "Eliminar directiva",
     "column": {
       "name": "Política",
       "mode": "Tipo",
@@ -4262,6 +4309,7 @@
     "wipe_warning": "Esto borra todo lo que hay en el dispositivo y no se puede deshacer. No hay simulacro. El dispositivo responde una vez y desaparece de esta consola para siempre.",
     "confirm_label": "Escribe el nombre de la máquina para confirmar",
     "confirm_dialog": "¿Borrar {machine}? Esto no se puede deshacer.",
+    "confirm_dialog_title": "Borrar dispositivo",
     "clear_protection": "Quitar la protección de restablecimiento",
     "clear_protection_help": "Cualquiera podrá volver a configurar el dispositivo. Suele ser lo correcto para hardware de la empresa.",
     "keep_protection_help": "El dispositivo no se podrá volver a configurar sin la cuenta que estaba iniciada en él. Es protección antirrobo, y un ladrillo si esa cuenta no era vuestra.",

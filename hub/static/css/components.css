@@ -1272,6 +1272,20 @@
     border-top: 1px solid var(--card-border);
 }
 
+/* confirmDialog() / noticeDialog() in common.js: one question or one sentence, so the 620px
+   editor width would leave a short line stranded in a wide box. */
+.modal--compact {
+    width: min(460px, 92vw);
+}
+
+/* pre-line, not pre-wrap: the catalog splits a question from its consequences with a blank
+   line, which must survive, but the leading spaces of a wrapped source string must not. */
+.modal__message {
+    white-space: pre-line;
+    overflow-wrap: anywhere;
+    line-height: 1.5;
+}
+
 /* ============ Console surface ============ */
 /* Monospace output pane. Shared by the command panel's inline result view and the
    terminal's scrollback so the two can't drift apart. */

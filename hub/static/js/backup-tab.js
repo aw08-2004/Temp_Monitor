@@ -946,12 +946,17 @@
         // over the original locations rewrites live files on a running PC, and it is the
         // one action on this page that cannot be undone by pressing something else.
         if (!targetDir) {
-            const ok = window.confirm(t('backups.tab.confirm_restore', {
-                count: selected.size,
-                machine: targetMachine,
-                qualifier: overwrite ? t('backups.tab.confirm_overwrite_all')
-                                     : t('backups.tab.confirm_overwrite_missing'),
-            }));
+            const ok = await confirmDialog({
+                title: t('backups.tab.confirm_restore_title'),
+                message: t('backups.tab.confirm_restore', {
+                    count: selected.size,
+                    machine: targetMachine,
+                    qualifier: overwrite ? t('backups.tab.confirm_overwrite_all')
+                                         : t('backups.tab.confirm_overwrite_missing'),
+                }),
+                confirmLabel: t('backups.tab.confirm_restore_ok'),
+                danger: true,
+            });
             if (!ok) return;
         }
 

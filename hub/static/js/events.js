@@ -251,7 +251,12 @@
         // The confirmation says what is kept as well as what goes: deleting a subscription
         // leaves the events it collected in place (see events.delete_subscription), and an
         // operator who thinks they are erasing a record would be stopped by the wrong fear.
-        if (!window.confirm(t('events.sub.confirm_delete', { name: sub.name }))) return;
+        if (!await confirmDialog({
+            title: t('events.sub.confirm_delete_title'),
+            message: t('events.sub.confirm_delete', { name: sub.name }),
+            confirmLabel: t('common.delete'),
+            danger: true,
+        })) return;
         try {
             await api(`/api/events/subscriptions/${encodeURIComponent(sub.id)}`,
                       { method: 'DELETE' });

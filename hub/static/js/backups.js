@@ -191,7 +191,7 @@ async function createKey() {
         showKey(result.key);
         renderKeyBanner();
     } catch (e) {
-        alert(e.message);
+        toast(e.message, { kind: 'error' });
     }
 }
 
@@ -200,7 +200,7 @@ async function revealKey() {
         const result = await api('/api/backups/key/reveal', json('POST'));
         showKey(result.key);
     } catch (e) {
-        alert(e.message);
+        toast(e.message, { kind: 'error' });
     }
 }
 
@@ -262,10 +262,14 @@ async function saveImportedKey() {
     // destination whose credentials could not be carried across keeps its schedule and
     // fails at its next upload, and an operator who was not told reads that as the import
     // having broken their backups.
+    // A dialog, not a toast, for the same reason: it has to be read before anything else.
     if (result.credentials_error) {
-        alert(result.credentials_error);
+        noticeDialog({ title: t('backups.key.import_stranded_title'),
+                       message: result.credentials_error, kind: 'error' });
     } else if (result.credentials_stranded) {
-        alert(t('backups.key.import_stranded', { count: result.credentials_stranded }));
+        noticeDialog({ title: t('backups.key.import_stranded_title'),
+                       message: t('backups.key.import_stranded',
+                                  { count: result.credentials_stranded }) });
     }
     load().catch(() => { /* the banner is already right; the next action resyncs the rest */ });
 }
@@ -526,7 +530,7 @@ document.getElementById('run-now').addEventListener('click', async () => {
     const destination = (state.schedule && state.schedule.destination_id)
         || (state.destinations[0] && state.destinations[0].id);
     if (!destination) {
-        alert(t('backups.runs.add_destination_first'));
+        toast(t('backups.runs.add_destination_first'));
         return;
     }
     try {
@@ -535,7 +539,7 @@ document.getElementById('run-now').addEventListener('click', async () => {
         render();
         schedulePoll();
     } catch (e) {
-        alert(e.message);
+        toast(e.message, { kind: 'error' });
     }
 });
 
@@ -1146,12 +1150,17 @@ function renderDestinationRow(dest) {
     edit.addEventListener('click', () => openDestination(dest));
     const remove = el('button', 'btn', t('common.delete'));
     remove.addEventListener('click', async () => {
-        if (!confirm(t('backups.destinations.confirm_delete', { name: dest.name }))) return;
+        if (!await confirmDialog({
+            title: t('backups.destinations.confirm_delete_title'),
+            message: t('backups.destinations.confirm_delete', { name: dest.name }),
+            confirmLabel: t('common.delete'),
+            danger: true,
+        })) return;
         try {
             await api(`/api/backups/destinations/${dest.id}`, json('DELETE'));
             await load();
         } catch (e) {
-            alert(e.message);
+            toast(e.message, { kind: 'error' });
         }
     });
     actions.appendChild(edit);

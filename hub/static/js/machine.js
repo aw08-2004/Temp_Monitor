@@ -1037,7 +1037,7 @@ async function saveChannel() {
         await loadChannel();
     } catch (e) {
         channelSelect.value = savedChannel;
-        window.alert(e.message);
+        toast(e.message, { kind: 'error' });
     }
 }
 

@@ -805,6 +805,25 @@ def _all_lists(value, path="", out=None):
     return out
 
 
+def _all_dicts(value, path="", out=None):
+    """Every dict nested in a JSON value -- not the value itself -- as (path, holder, key),
+    the same shape _all_lists answers with."""
+    if out is None:
+        out = []
+    if isinstance(value, dict):
+        pairs = ((key, item, f"{path}.{key}" if path else str(key))
+                 for key, item in value.items())
+    elif isinstance(value, list):
+        pairs = ((index, item, f"{path}[{index}]") for index, item in enumerate(value))
+    else:
+        return out
+    for key, item, sub in pairs:
+        if isinstance(item, dict):
+            out.append((sub, value, key))
+        _all_dicts(item, sub, out)
+    return out
+
+
 # The keys that say which entry a cut-off entry was, in order of preference, and how many
 # such names one cut list carries -- never more than a quarter of the result, or naming the
 # cut entries would itself push the result over and cut more of them.
@@ -817,6 +836,41 @@ def _label(item):
         if item.get(key) not in (None, ""):
             return item[key]
     return None
+
+
+def _trim_largest_dict(data, cut, limit, current):
+    """fit_result's last resort: shorten the largest dict with more than one key, in place,
+    and record it under `cut` the way a cut list is recorded. Returns False when there is no
+    such dict, so the caller stops."""
+    candidates = [c for c in _all_dicts(data) if len(c[1][c[2]]) > 1]
+    if not candidates and isinstance(data, dict) and len(data) > 1:
+        candidates = [("(the answer itself)", None, None)]
+    if not candidates:
+        return False
+
+    def entries(candidate):
+        return data if candidate[1] is None else candidate[1][candidate[2]]
+
+    path, holder, key = max(candidates, key=lambda c: _size(entries(c)))
+    target = entries((path, holder, key))
+    size = _size(target)
+    ratio = max(0.0, 1.0 - (current - limit) / max(1, size))
+    keep = max(1, min(len(target) // 2 if ratio < 0.5 else int(len(target) * ratio),
+                      len(target) - 1))
+    names = list(target)
+    record = cut.setdefault(path, {"total": len(names)})
+    dropped = [str(k)[:COMPACT_TEXT_CHARS // 4] for k in names[keep:]][:MAX_CUT_NAMES]
+    room = limit // 4
+    shown_names = []
+    for name in dropped:
+        if _size(shown_names + [name]) > room:
+            break
+        shown_names.append(name)
+    record["not_shown"] = record.get("not_shown", []) + shown_names
+    for k in names[keep:]:
+        del target[k]
+    record["shown"] = len(target)
+    return True
 
 
 def fit_result(result, limit=MAX_TOOL_RESULT_CHARS):
@@ -875,7 +929,17 @@ def fit_result(result, limit=MAX_TOOL_RESULT_CHARS):
                 if size > best_size:
                     best, best_size = (path, holder, key), size
         if best is None:
-            break
+            # No list left that can shrink, and still too big: the bulk is in dicts keyed by
+            # name -- the rules editor's operator labels and button presets are one such
+            # answer. Drop whole ENTRIES of the largest dict, keeping its first keys and
+            # naming the rest, rather than reaching the character slice below: that slice
+            # is invalid JSON, which is the failure this function exists to prevent, and
+            # three more button presets were enough to reach it. Nested dicts first; the
+            # answer's own top level only when nothing inside it can go.
+            if not _trim_largest_dict(data, cut, limit, len(content)):
+                break
+            content = render()
+            continue
         path, holder, key = best
         items = data if holder is None else holder[key]
         record_path = path or "(the answer itself)"

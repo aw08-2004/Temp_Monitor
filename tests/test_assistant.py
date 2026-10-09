@@ -1014,6 +1014,23 @@ def test_trimming_reaches_nested_lists():
           entry.get("id") == "t1" and len(entry["result"]["stdout"]) < 400
           and entry["result"]["run_id"] == "r" * 500)
 
+    # The bulk in dicts keyed by name, with no list left to shorten -- the rules editor's
+    # vocabulary is this shape. It used to reach the character slice and come back as invalid
+    # JSON once three button presets were added.
+    keyed = {"ok": True, "data": {"groups": ["a"], "presets": {
+        f"preset_{i}": {"label": "L" * 150, "buttons": ["yes"]} for i in range(60)}}}
+    content = assistant.fit_result(keyed, limit=3000)
+    parsed = json.loads(content)
+    presets = parsed["data"]["presets"]
+    check("a dict-heavy answer fits as valid JSON", len(content) <= 3000)
+    check("...keeping its first whole entries", presets and "preset_0" in presets
+          and all(len(v["label"]) == 150 for v in presets.values()))
+    record = parsed["truncated"]["lists"]["presets"]
+    check("...and naming every entry it left out, across passes",
+          record["total"] == 60 and record["shown"] == len(presets) < 60
+          and set(record.get("not_shown", [])) == {f"preset_{i}"
+                                                   for i in range(len(presets), 60)})
+
 
 def test_every_read_route_survives_narrowing_and_trimming():
     """The property, against the real routes: whatever shape a read answers with, inflating

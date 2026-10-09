@@ -81,7 +81,7 @@
             }).catch(function () {
                 picker.disabled = false;
                 picker.value = lang;
-                alert(t('common.language_change_failed'));
+                toast(t('common.language_change_failed'), { kind: 'error' });
             });
         });
     });

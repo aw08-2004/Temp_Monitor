@@ -704,6 +704,117 @@ function toast(message, { kind = 'info', timeout = 6000 } = {}) {
     return item;
 }
 
+// ============ Dialogs ============
+// The console's own replacement for the browser's confirm() and alert(). Those boxes were
+// on every destructive button in the console, and they are the one thing on a page that
+// cannot be styled, translated in their chrome, or titled: the operator was asked "Delete
+// the policy X?" under a header reading "localhost:5000 says", with an OK button that said
+// nothing about what OK would do. Here the button names the act ("Delete", "Revoke",
+// "Install now"), and a destructive one is drawn as such.
+//
+// Built on <dialog>.showModal() like every other modal here (see .modal in components.css)
+// and built fresh per call, then removed: one shared element would need a queue for the
+// second question asked while the first is still open, and a fresh one simply stacks.
+//
+// Decided on the buttons' click and the dialog's `cancel` (Escape), NOT on `close`: `close`
+// is queued as a later task, and assistant.js's first delete dialog, which waited for it,
+// never deleted anything in a frame the browser was not drawing.
+//
+// Where a toast would do, use toast(). It renders under document.body, and a modal <dialog>
+// sits in the top layer above every z-index -- so a toast raised while a dialog is open is
+// painted BEHIND it. An error raised from inside an open dialog is a noticeDialog() instead.
+function _openDialog({ title, message, buttons, initialFocus }) {
+    return new Promise((resolve) => {
+        const dialog = document.createElement('dialog');
+        dialog.className = 'modal modal--compact';
+        const titleId = `dlg-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
+        dialog.setAttribute('aria-labelledby', titleId);
+
+        const head = document.createElement('div');
+        head.className = 'modal__head';
+        const h2 = document.createElement('h2');
+        h2.className = 'modal__title';
+        h2.id = titleId;
+        h2.textContent = title;
+        head.appendChild(h2);
+
+        // textContent, never markup: these messages quote machine, group and file names.
+        // .modal__message keeps the "\n\n" the catalog uses to split a question from its
+        // consequences, which a native confirm() honoured and a <p> would collapse.
+        const body = document.createElement('div');
+        body.className = 'modal__body';
+        const text = document.createElement('p');
+        text.className = 'modal__message';
+        text.textContent = message || '';
+        body.appendChild(text);
+
+        const foot = document.createElement('div');
+        foot.className = 'modal__foot';
+
+        let settled = false;
+        const finish = (value) => {
+            if (settled) return;
+            settled = true;
+            dialog.removeEventListener('cancel', onCancel);
+            if (dialog.open) dialog.close();
+            dialog.remove();
+            resolve(value);
+        };
+        const onCancel = () => finish(buttons.find((b) => b.cancel)?.value);
+        dialog.addEventListener('cancel', onCancel);
+
+        const nodes = buttons.map((spec) => {
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.className = spec.className;
+            button.textContent = spec.label;
+            button.addEventListener('click', () => finish(spec.value));
+            foot.appendChild(button);
+            return button;
+        });
+
+        dialog.append(head, body, foot);
+        document.body.appendChild(dialog);
+        dialog.showModal();
+        (nodes[initialFocus] || nodes[nodes.length - 1]).focus();
+    });
+}
+
+/** Ask before doing something. Resolves true only when the confirm button was pressed;
+ *  Cancel and Escape both resolve false.
+ *
+ *  `danger` is for anything that removes, revokes or cannot be undone. It draws the
+ *  button as destructive AND puts the focus on Cancel, so a reflexive Enter does nothing --
+ *  the one property of the native confirm() worth losing, since its focus sat on OK. */
+function confirmDialog({ title, message, confirmLabel, cancelLabel, danger = false } = {}) {
+    return _openDialog({
+        title: title || t('dialog.confirm_title'),
+        message,
+        buttons: [
+            { label: cancelLabel || t('common.cancel'), className: 'btn btn--ghost',
+              value: false, cancel: true },
+            { label: confirmLabel || t('dialog.ok'),
+              className: danger ? 'btn btn--danger' : 'btn btn--primary', value: true },
+        ],
+        initialFocus: danger ? 0 : 1,
+    });
+}
+
+/** Tell the operator something they must read before carrying on -- the outcome of an
+ *  action that only partly happened, or an error raised while another dialog is open.
+ *  Anything less than that is a toast(). Resolves once it is closed. */
+function noticeDialog({ title, message, kind = 'info', closeLabel } = {}) {
+    return _openDialog({
+        title: title || t(kind === 'error' ? 'dialog.error_title' : 'dialog.notice_title'),
+        message,
+        buttons: [
+            { label: closeLabel || t('dialog.ok'), className: 'btn btn--primary',
+              value: undefined, cancel: true },
+        ],
+        initialFocus: 0,
+    }).then(() => undefined);
+}
+
 // ---- Tiny per-element builders shared by the pages ----
 //
 // These two were once copied into a dozen page scripts. They live here now; the per-page

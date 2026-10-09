@@ -108,8 +108,12 @@
             actions.appendChild(button(t('common.edit'), 'ghost',
                                        () => renderForm(favorite)));
             actions.appendChild(button(t('common.delete'), 'ghost', async () => {
-                if (!window.confirm(t('machine.favorites.confirm_delete',
-                                      { name: favorite.name }))) return;
+                if (!await confirmDialog({
+                    title: t('machine.favorites.confirm_delete_title'),
+                    message: t('machine.favorites.confirm_delete', { name: favorite.name }),
+                    confirmLabel: t('common.delete'),
+                    danger: true,
+                })) return;
                 try {
                     await FleetApi.favorites.remove(favorite.id);
                     await renderList();

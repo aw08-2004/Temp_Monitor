@@ -3322,6 +3322,13 @@ BUTTON_PRESETS = {
     "ok_cancel": (BUTTON_OK, BUTTON_CANCEL),
     "yes_no": (BUTTON_YES, BUTTON_NO),
     "yes_no_later": (BUTTON_YES, BUTTON_NO, BUTTON_LATER),
+    # The two-button "now or later" pairs, for a message whose only real choice is WHEN: a
+    # restart the user may postpone but not refuse has no honest "No" to offer, and putting
+    # one there invites an answer the rule then has to ignore. Built from the existing ids, so
+    # no agent change -- the agent draws whatever ids it is sent and reports the one pressed.
+    "yes_later": (BUTTON_YES, BUTTON_LATER),
+    "no_later": (BUTTON_NO, BUTTON_LATER),
+    "ok_later": (BUTTON_OK, BUTTON_LATER),
     "accept_decline": (BUTTON_ACCEPT, BUTTON_DECLINE),
     "acknowledge_only": (BUTTON_OK,),
 }

@@ -102,6 +102,7 @@
     "edit": "Bearbeiten",
     "delete": "Löschen",
     "confirm_delete": "Gerätegruppe „{name}“ löschen?\n\nBereits angelegte Verteilungen sind nicht betroffen, und an keinem PC ändert sich etwas.",
+    "confirm_delete_title": "Gerätegruppe löschen",
     "no_permission": "Nur Personen mit der Berechtigung „Gerätegruppen verwalten“ können Gruppen anlegen oder ändern.",
     "pick": "Gruppe wählen…",
     "none_defined": "Noch keine Gerätegruppen angelegt.",
@@ -110,6 +111,13 @@
   },
   "toast": {
     "dismiss": "Schließen"
+  },
+  "dialog": {
+    "ok": "OK",
+    "confirm_title": "Sind Sie sicher?",
+    "notice_title": "Bitte beachten",
+    "error_title": "Etwas ist schiefgelaufen",
+    "keep_running": "Weiterlaufen lassen"
   },
   "login": {
     "title": "Anmelden",
@@ -269,6 +277,7 @@
       "other": "{visible} von {count} Computern"
     },
     "confirm_delete": "„{machine}“ dauerhaft löschen?\n\nDamit werden Identität, der gesamte Temperaturverlauf und die Flottenregistrierung entfernt. Das kann nicht rückgängig gemacht werden.",
+    "confirm_delete_title": "Rechner löschen",
     "delete_failed": "„{machine}“ konnte nicht gelöscht werden: {error}",
     "load_failed": "Das Inventar konnte nicht geladen werden.",
     "wake_all": "Ausgeschaltete PCs aufwecken",
@@ -337,6 +346,7 @@
         "one": "„{survivor}“ behalten und „{victim}“ hineinführen?\n\nDer Temperaturverlauf der zusammengeführten Computer geht auf „{survivor}“ über; ihre doppelten Datensätze und Flottenregistrierungen werden entfernt. Das kann nicht rückgängig gemacht werden.",
         "other": "„{survivor}“ behalten und {count} Computer hineinführen?\n\nDer Temperaturverlauf der zusammengeführten Computer geht auf „{survivor}“ über; ihre doppelten Datensätze und Flottenregistrierungen werden entfernt. Das kann nicht rückgängig gemacht werden."
       },
+      "confirm_title": "Doppelte Rechner zusammenführen",
       "merge_failed": "Zusammenführen nicht möglich: {error}"
     },
     "unknown_kind": "Alarm eines unbekannten Typs ({kind})",
@@ -464,6 +474,8 @@
     },
     "email_required": "Eine E-Mail-Adresse ist erforderlich.",
     "confirm_delete": "„{user}“ aus dem Verzeichnis entfernen?\n\nDamit wird nur das Profil entfernt. Es ändert NICHT, was diese Person tun darf oder ob sie sich anmelden kann – das legen ihre Berechtigungsgruppen fest.",
+    "confirm_delete_title": "Benutzer entfernen",
+    "confirm_delete_ok": "Entfernen",
     "delete_failed": "„{email}“ konnte nicht gelöscht werden: {error}",
     "load_failed": "Die Benutzer konnten nicht geladen werden: {error}",
     "views_nav": "Benutzeransichten",
@@ -497,6 +509,7 @@
     },
     "revoke": "Widerrufen",
     "confirm_delete": "Einladung \"{label}\" löschen? Wer bereits darüber beigetreten ist, behält den Zugriff -- entfernen Sie die Person aus der Berechtigungsgruppe, um ihn zu entziehen.",
+    "confirm_delete_title": "Einladung löschen",
     "editor": {
       "title": "Neuer Einladungslink",
       "label": "Bezeichnung",
@@ -567,6 +580,7 @@
       "one": "Berechtigungsgruppe „{group}“ löschen?\n\n{count} Mitglied verliert den damit gewährten Zugriff. Wer danach in keiner Gruppe mehr ist, kann sich nicht mehr anmelden.",
       "other": "Berechtigungsgruppe „{group}“ löschen?\n\n{count} Mitglieder verlieren den damit gewährten Zugriff. Wer danach in keiner Gruppe mehr ist, kann sich nicht mehr anmelden."
     },
+    "confirm_delete_title": "Berechtigungsgruppe löschen",
     "confirm_delete_directory": {
       "one": "Berechtigungsgruppe „{group}“ löschen?\n\n{members} sowie alle in {count} zugeordneten Verzeichnisgruppe verlieren den damit gewährten Zugriff. Wer danach in keiner Gruppe mehr ist, kann sich nicht mehr anmelden.",
       "other": "Berechtigungsgruppe „{group}“ löschen?\n\n{members} sowie alle in {count} zugeordneten Verzeichnisgruppen verlieren den damit gewährten Zugriff. Wer danach in keiner Gruppe mehr ist, kann sich nicht mehr anmelden."
@@ -1349,6 +1363,7 @@
       "key_save": "Schlüssel speichern",
       "key_remove": "Schlüssel entfernen",
       "key_remove_confirm": "API-Schlüssel entfernen? Gehostete Anbieter antworten erst wieder, wenn ein neuer gespeichert ist.",
+      "key_remove_confirm_title": "API-Schlüssel entfernen",
       "key_saved": "Schlüssel gespeichert. Er gilt sofort.",
       "key_removed": "Schlüssel entfernt.",
       "key_cannot_write": "Dieser Hub kann seine .env-Datei nicht schreiben, der Schlüssel muss daher als AI_API_KEY auf dem Server gesetzt werden."
@@ -1526,6 +1541,8 @@
       "save": "Anmeldeeinstellungen speichern",
       "no_provider_left": "Damit gäbe es keine Möglichkeit mehr, sich an diesem Hub anzumelden. Richte vor dem Speichern Google oder einen OIDC-Anbieter ein.",
       "confirm": "Ändern, wie sich Personen an diesem Hub anmelden?\n\nDas wirkt sofort für neue Anmeldungen. Bestehende Sitzungen werden nicht abgemeldet. Sind die neuen Einstellungen falsch, können die Notfall-Administratoren aus ALLOWED_EMAILS sie zurücksetzen – sofern sie sich noch anmelden können.",
+      "confirm_title": "Anmeldeeinstellungen ändern",
+      "confirm_ok": "Änderungen übernehmen",
       "applying": "Wird angewendet…",
       "saved_changed": "Gespeichert. Aktualisiert: {fields}",
       "saved_unchanged": "Keine Änderungen zu speichern."
@@ -1607,6 +1624,7 @@
     "detect_version_min": "{name} ≥ {version}",
     "deploy": "Verteilen",
     "confirm_delete": "Paket „{package}“ löschen? Der Verteilungsverlauf bleibt erhalten.",
+    "confirm_delete_title": "Paket löschen",
     "http_413": "Der Upload wurde als zu groß abgelehnt (HTTP 413), bevor er den Hub erreichte. Das war der Reverse-Proxy vor dem Hub, nicht dessen eigenes Limit – erhöhe client_max_body_size in nginx (oder das Äquivalent: maxAllowedContentLength in IIS, LimitRequestBody in Apache) und lade ihn neu.",
     "http_502": "Der Hub hat nicht geantwortet (HTTP {status}). Ein großer Upload kann auch in das Lesezeitlimit des Proxys laufen – sieh dir neben dem Hub-Log auch das Proxy-Log an.",
     "http_other": "HTTP {status}",
@@ -1744,6 +1762,8 @@
       "retry_failures": "Fehlschläge wiederholen",
       "cancel": "Verteilung abbrechen",
       "confirm_cancel": "Diese Verteilung stoppen? Computer, die den Installer bereits ausführen, führen ihn zu Ende.",
+      "confirm_cancel_title": "Verteilung stoppen",
+      "confirm_cancel_ok": "Verteilung stoppen",
       "target_col": {
         "machine": "Computer",
         "status": "Status",
@@ -1841,6 +1861,7 @@
       "import_empty": "Füge den Schlüssel ein, den dieser Hub verwenden soll.",
       "import_replace_warning": "Das ersetzt Schlüssel {id}. Damit bereits erstellte Sicherungen sind nur wieder lesbar, wenn du ihn zurück importierst – stelle also sicher, dass du ihn noch hast.",
       "import_stranded": "Der Schlüssel wurde übernommen, aber bei {count} Ziel(en) kann dieser Hub die Zugangsdaten nicht mehr lesen. Öffne jedes davon und gib die Zugangsdaten erneut ein, sonst schlägt die nächste Sicherung fehl.",
+      "import_stranded_title": "Zugangsdaten für Ziele erforderlich",
       "unescrowed_title": "Der Verschlüsselungsschlüssel wurde nirgendwo sonst hinterlegt",
       "unescrowed_text": "Geht dieser Server verloren, wird jede bisher erstellte Sicherung dauerhaft unlesbar. Zeige den Schlüssel an, lege ihn in einem Passwortmanager oder einem versiegelten Umschlag ab und bestätige das.",
       "reveal": "Schlüssel anzeigen",
@@ -1977,6 +1998,7 @@
       "stored": "gespeichert",
       "missing": "FEHLEN",
       "confirm_delete": "Ziel „{name}“ löschen? Bereits dorthin hochgeladene Sicherungen werden NICHT gelöscht, aber der Hub kommt nicht mehr an sie heran.",
+      "confirm_delete_title": "Ziel löschen",
       "editor": {
         "new_title": "Neues Ziel",
         "edit_title": "{name} bearbeiten",
@@ -2080,6 +2102,8 @@
       "menu_untick": "Auswahl aufheben",
       "actions_for": "Aktionen für {path}",
       "confirm_restore": "{count} Element(e) an ihre URSPRÜNGLICHEN Orte auf {machine} zurückschreiben?\n\nDortige Dateien werden ersetzt{qualifier}",
+      "confirm_restore_title": "An ursprünglichen Orten wiederherstellen",
+      "confirm_restore_ok": "Wiederherstellen",
       "confirm_overwrite_all": ".",
       "confirm_overwrite_missing": " – nur dort, wo sie nicht mehr existieren.",
       "queued": "In der Warteschlange: {files} Datei(en) aus {archives} Archiv(en).",
@@ -2443,6 +2467,7 @@
       "shared_by": "geteilt von {who}",
       "use": "Verwenden",
       "confirm_delete": "Favorit „{name}“ löschen?",
+      "confirm_delete_title": "Favorit löschen",
       "group": "{title} ({count})",
       "mine": "Meine",
       "shared_with_me": "Mit mir geteilt",
@@ -2729,11 +2754,15 @@
     "deleted_image": "Gelöschtes Image",
     "flash_button": "Flashen…",
     "confirm_delete": "Image {name} löschen? Bereits damit aktualisierte Rechner sind nicht betroffen.",
+    "confirm_delete_title": "Firmware-Image löschen",
     "confirm_cancel_job": "Dieses Update abbrechen? Rechner, die das Image bereits erhalten haben, flashen zu Ende.",
+    "confirm_cancel_job_title": "Firmware-Update abbrechen",
+    "confirm_cancel_job_ok": "Update abbrechen",
     "cancel_job": "Update abbrechen",
     "cancel_target": "Abbrechen",
     "cancel_partial": "{count} Rechner hatten das Image bereits erhalten und flashen zu Ende.",
     "cancel_awaiting_reboot": "{count} Rechner haben das Image bereitgestellt und warten auf einen Neustart. Nach dem Neustart wird das automatisch aufgelöst: übernommen, wenn die neue BIOS-Version erscheint, sonst fehlgeschlagen.",
+    "cancel_result_title": "Update abgebrochen",
     "target_exit_code": "Exitcode des Update-Tools {code}",
     "target_bitlocker": "BitLocker: {state}",
     "target_tool_log": "Protokoll des Update-Tools",
@@ -2831,6 +2860,8 @@
     "unnamed": "Unbenanntes Gerät",
     "revoked": "Widerrufen",
     "confirm_revoke": "{device} widerrufen? Die App funktioniert sofort nicht mehr.",
+    "confirm_revoke_title": "Gerät widerrufen",
+    "confirm_revoke_ok": "Widerrufen",
     "col": {
       "device": "Gerät",
       "owner": "Angemeldet als",
@@ -2873,6 +2904,7 @@
     "matching": "trifft derzeit zu",
     "targets": "erfasste PCs",
     "confirm_delete": "Diese Regel und ihren Verlauf löschen?",
+    "confirm_delete_title": "Regel löschen",
     "actions_disabled": "Regeln werden ausgewertet, ihre Aktionen sind flottenweit jedoch abgeschaltet.",
     "commands_disabled": "Befehlsaktionen sind flottenweit abgeschaltet. Diese Regel wird also ausgewertet, erteilt aber keinen Befehl — auch nicht den, auf den die Antwort einer Nachricht verweist, etwa ein Neustart, nachdem der Benutzer auf Ja geklickt hat. Schalten Sie „Befehlsaktionen aktiviert“ unter Einstellungen → Regeln ein, damit sie ausgeführt wird.",
     "section_target": "Welche PCs",
@@ -3094,6 +3126,9 @@
       "ok_cancel": "OK / Abbrechen",
       "yes_no": "Ja / Nein",
       "yes_no_later": "Ja / Nein / Später",
+      "yes_later": "Ja / Später",
+      "no_later": "Nein / Später",
+      "ok_later": "OK / Später",
       "accept_decline": "Annehmen / Ablehnen",
       "acknowledge_only": "Nur bestätigen"
     },
@@ -3310,6 +3345,7 @@
     "disable": "Deaktivieren",
     "delete": "Löschen",
     "delete_confirm": "Den Wächter „{name}“ löschen? Die Rechner hören beim nächsten Herzschlag auf zu überwachen.",
+    "delete_confirm_title": "Watchdog löschen",
     "show_state": "Rechner",
     "state_title": "{name} -- {service}",
     "state_help": "Was jeder Rechner zuletzt gemeldet hat. Ein Rechner, der betroffen ist, hier aber fehlt, hat den Wächter noch nicht übernommen.",
@@ -3452,6 +3488,7 @@
     "body": "Skript",
     "body_help": "Läuft als SYSTEM. Verwenden Sie {{sys.machine}} für Werte des Rechners und {{input.name}} für einen Wert, den die Regel liefert.",
     "confirm_delete": "Dieses Skript löschen?",
+    "confirm_delete_title": "Skript löschen",
     "delete": "Löschen",
     "delete_failed": "Löschen fehlgeschlagen: {error}",
     "description": "Beschreibung",
@@ -3799,7 +3836,8 @@
       "every_day": "Täglich",
       "summary": "{start} für {minutes} Min.",
       "disabled": "Deaktiviert",
-      "confirm_delete": "Wartungsfenster {name} löschen?"
+      "confirm_delete": "Wartungsfenster {name} löschen?",
+      "confirm_delete_title": "Wartungsfenster löschen"
     },
     "run": {
       "new": "Patches ausführen",
@@ -3812,10 +3850,13 @@
       "emergency_help": "Ignoriert jedes Wartungsfenster und installiert, sobald ein Rechner erreichbar ist. Diese Rechner können während der Arbeitszeit neu starten.",
       "emergency_badge": "Notfall",
       "confirm_emergency": "Jetzt auf {count} Rechner(n) installieren und jedes Wartungsfenster ignorieren? Sie können während der Arbeitszeit neu starten.",
+      "confirm_emergency_title": "Notfall-Installation",
+      "confirm_emergency_ok": "Jetzt installieren",
       "start": "Lauf starten",
       "progress": "{done} von {total}",
       "cancel": "Abbrechen",
       "cancelled": "Abgebrochen. {recalled} Rechner wurden zurückgerufen; bereits neu startende blieben unberührt, weil die Patches auf ihnen sind.",
+      "cancelled_title": "Lauf abgebrochen",
       "retry": "Fehler wiederholen"
     }
   },
@@ -3885,7 +3926,8 @@
       "disable": "Ausschalten",
       "none": "Auf diesem Hub wird nichts erfasst.",
       "none_manage": "Es wird noch nichts erfasst. Legen Sie ein Abonnement an, um festzulegen, welche Ereignisdatensätze die Flotte senden soll.",
-      "confirm_delete": "Die Erfassung von \"{name}\" beenden? Bereits erfasste Ereignisse bleiben erhalten."
+      "confirm_delete": "Die Erfassung von \"{name}\" beenden? Bereits erfasste Ereignisse bleiben erhalten.",
+      "confirm_delete_title": "Abonnement löschen"
     }
   },
   "channels": {
@@ -3912,6 +3954,7 @@
     "borrowed_badge": "Geliehen",
     "revoke": "Freigabe beenden",
     "confirm_revoke": "Freigabe von {machine} für {hub} beenden? Eine dort offene Sitzung wird sofort beendet.",
+    "confirm_revoke_title": "Freigabe des Rechners beenden",
     "lending": {
       "heading": "Verliehene Rechner",
       "intro": "Jede Zeile ist ein Rechner, an einen Hub verliehen, mit genau den angekreuzten Berechtigungen. Nichts kommt automatisch dazu: Ein Hub mit Fernsteuerung sieht die Telemetrie des Rechners nur, wenn auch das gewährt wurde.",
@@ -3939,6 +3982,7 @@
       "generate": "Code erzeugen",
       "unpair": "Kopplung lösen",
       "confirm_unpair": "Kopplung mit {hub} lösen? Die Zugangsdaten werden sofort ungültig und alle freigegebenen Rechner ({count}) werden zurückgezogen.",
+      "confirm_unpair_title": "Kopplung mit Hub lösen",
       "calls_itself": "Nennt sich „{name}“",
       "no_peers": "Es ist kein anderer Hub mit diesem gekoppelt.",
       "no_peers_hint": "Laden Sie einen Hub ein, um einen einmaligen Code zu erhalten, und geben Sie ihn weiter.",
@@ -3948,6 +3992,7 @@
       "pair": "Koppeln",
       "remove": "Entfernen",
       "confirm_remove": "{hub} entfernen? Damit werden Adresse, Zugangsdaten und die geliehenen Rechner vergessen. Die Kopplung auf der Gegenseite wird dadurch NICHT gelöst -- bitten Sie dort um einen Widerruf.",
+      "confirm_remove_title": "Hub entfernen",
       "no_links": "Kein anderer Hub verleiht an diesen.",
       "no_links_hint": "Bitten Sie darum, diesen Hub einzuladen, und fügen Sie den erhaltenen Code ein.",
       "no_token": "Die Zugangsdaten sind nicht lesbar. Entfernen Sie den Hub und koppeln Sie erneut.",
@@ -4056,6 +4101,7 @@
       "uploaded_ok": "Hochgeladen.",
       "remove": "Bereitstellung beenden",
       "remove_confirm": "Bereitstellung dieser APK beenden? Bereits gedruckte Codes funktionieren dann nicht mehr.",
+      "remove_confirm_title": "APK nicht mehr bereitstellen",
       "failed": "Das wurde abgelehnt.",
       "file_name": "Datei",
       "size": "Größe",
@@ -4144,6 +4190,7 @@
     "edit": "Bearbeiten",
     "delete": "Löschen",
     "confirm_delete": "Die Richtlinie „{name}“ löschen? Bei den erfassten Geräten werden ihre Einschränkungen bei der nächsten Meldung aufgehoben.",
+    "confirm_delete_title": "Richtlinie löschen",
     "column": {
       "name": "Richtlinie",
       "mode": "Art",
@@ -4262,6 +4309,7 @@
     "wipe_warning": "Damit wird alles auf dem Gerät gelöscht, und es lässt sich nicht rückgängig machen. Es gibt keinen Probelauf. Das Gerät antwortet einmal und verschwindet dann endgültig aus dieser Konsole.",
     "confirm_label": "Zum Bestätigen den Namen des Rechners eingeben",
     "confirm_dialog": "{machine} löschen? Das lässt sich nicht rückgängig machen.",
+    "confirm_dialog_title": "Gerät löschen",
     "clear_protection": "Schutz vor Zurücksetzen aufheben",
     "clear_protection_help": "Das Gerät kann von jedem neu eingerichtet werden. Für firmeneigene Hardware ist das meist richtig.",
     "keep_protection_help": "Das Gerät kann ohne das zuletzt angemeldete Konto nicht neu eingerichtet werden. Das ist Diebstahlschutz -- und ein Briefbeschwerer, wenn das Konto nicht Ihnen gehörte.",

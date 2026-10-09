@@ -117,8 +117,13 @@
         input.addEventListener('keydown', (event) => {
             if (event.key === 'Enter' && input.value.trim()) saveKey(input.value.trim());
         });
-        remove.addEventListener('click', () => {
-            if (window.confirm(t('settings.ai.key_remove_confirm'))) saveKey('');
+        remove.addEventListener('click', async () => {
+            if (await confirmDialog({
+                title: t('settings.ai.key_remove_confirm_title'),
+                message: t('settings.ai.key_remove_confirm'),
+                confirmLabel: t('settings.ai.key_remove'),
+                danger: true,
+            })) saveKey('');
         });
         wrap.appendChild(el('div', { class: 'toolbar', style: 'margin-top: var(--space-2);' },
             [input, save, remove]));

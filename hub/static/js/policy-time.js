@@ -383,7 +383,12 @@
     }
 
     async function destroy(entry) {
-        if (!window.confirm(t('policy.confirm_delete', { name: entry.name }))) return;
+        if (!await confirmDialog({
+            title: t('policy.confirm_delete_title'),
+            message: t('policy.confirm_delete', { name: entry.name }),
+            confirmLabel: t('common.delete'),
+            danger: true,
+        })) return;
         try {
             await fetch(`/api/policy/times/${encodeURIComponent(entry.id)}`,
                         { method: 'DELETE' });
